@@ -1,3 +1,5 @@
+<img src="docs/img/logo.svg" alt="" width="96" align="right">
+
 # shear
 
 A worktree janitor for [herdr](https://github.com/moneycaringcoder/herdr).
@@ -11,7 +13,34 @@ the disk fills up.
 one looks and what it costs in disk, and removes the ones you pick — never the
 ones you did not.
 
-<!-- EVIDENCE: live run output goes here -->
+```
+$ shear --list
+
+  verdict classes          age   disk branch     path
+
+repo repo  /tmp/shear-demo/repo
+  safe    gone,merged      <1h 8.0 kB landed     /tmp/shear-demo/wt-landed
+  review  merged             - 8.0 kB (detached) /tmp/shear-demo/wt-detached
+  review  stale             2y 8.0 kB forgotten  /tmp/shear-demo/wt-forgotten
+  review  dirty,merged     <1h 3.9 MB messy      /tmp/shear-demo/wt-messy
+  review  merged           <1h 8.0 kB reviewed   /tmp/shear-demo/wt-reviewed
+  review  prunable,merged  <1h      - vanished   /tmp/shear-demo/wt-vanished
+  keep                     <1h 8.0 kB inflight   /tmp/shear-demo/wt-inflight
+  blocked merged           <1h 456 kB main       /tmp/shear-demo/repo
+  blocked locked,merged    <1h 8.0 kB pinned     /tmp/shear-demo/wt-pinned
+
+9 worktrees in 1 repository: 1 safe worktree, 5 review, 1 keep, 2 blocked.
+Removing the 1 safe worktree would reclaim 8.0 kB of the 4.4 MB all 9 worktrees occupy.
+Removing a worktree leaves its branch and every commit on it intact: only the checkout
+goes.
+```
+
+That is a real run against a real repository built to contain one worktree of
+every class, not a mock-up. One of nine is `safe`; the other eight each have a
+reason not to be, and the reason is on the row.
+
+Nine worktrees is a small session. The number that makes this worth running is
+what forty look like.
 
 ## What it does
 
@@ -30,6 +59,55 @@ The scan is read-only git plumbing (`worktree list`, `status --porcelain=v2`,
 `for-each-ref`) plus one herdr call to find out which checkouts a workspace is
 holding open. If herdr is not reachable, the scan degrades to "no workspace
 information" with a note on screen — never to a silently shorter list.
+
+```mermaid
+flowchart LR
+  subgraph herdr["herdr socket"]
+    S["session.snapshot<br/>which repos, which workspaces"]
+    W["worktree.list<br/>open_workspace_id only"]
+    R["worktree.remove<br/>keyed by workspace"]
+  end
+
+  subgraph git["git, read-only"]
+    L["worktree list --porcelain -z<br/>paths, HEADs, locked, prunable"]
+    F["for-each-ref<br/>upstream, gone, tip date"]
+    M["for-each-ref --merged<br/>contained in the integration ref"]
+    D["status --porcelain=v2 -z<br/>uncommitted work"]
+  end
+
+  S --> SC[scan]
+  W --> SC
+  L --> SC
+  F --> SC
+  M --> SC
+  D --> SC
+  SC --> CL{classify}
+  CL --> INV[["inventory<br/>safe / review / keep / blocked"]]
+  INV --> T["--list, --json"]
+  INV --> P["--review pane"]
+  P -->|explicit selection| G{{guards}}
+  G -->|open in herdr| R
+  G -->|not open| GR["git worktree remove"]
+  G -->|refused| X["a sentence naming<br/>the unblocking action"]
+  R --> U[(undo log)]
+  GR --> U
+```
+
+Two things about that diagram are worth stating out loud, because both invert
+the obvious assumption and both were established by probing a live herdr rather
+than by reading documentation:
+
+- **git is the authority, not herdr.** herdr's `worktree.list` reports no lock
+  flag at all, gives every row the *repository* name as its label, and drops
+  git's reason for a prunable worktree. It is called for exactly one field,
+  `open_workspace_id`.
+- **`worktree.remove` is keyed by workspace, not by path**, so herdr can only
+  remove a worktree it has open — which is the minority. The worktrees that pile
+  up are precisely the ones nobody has open, and those go through
+  `git worktree remove`.
+
+See [docs/herdr-protocol.md](docs/herdr-protocol.md) and
+[docs/git-plumbing.md](docs/git-plumbing.md) for what was verified and how.
 
 ## Classification
 
@@ -67,6 +145,13 @@ branch would otherwise report every worktree as unmerged. Nothing carrying
 Every condition in `safe` must be a *positive* observation. An unanswerable
 question fails the test rather than passing it.
 
+<img src="docs/img/verdicts.svg" alt="How one worktree gets its verdict: the main checkout and anything locked or open in herdr are blocked outright; dirty is at most review; safe requires merged and gone upstream together; anything with a single death signal is review; the rest is keep." width="100%">
+
+The shape of that picture is the point. A single blocker short-circuits the
+whole decision, while `safe` needs every question answered — and answered
+*positively*, which is why a repository with no resolvable default branch has no
+safe worktrees at all rather than a listing full of them.
+
 ## Safety rules
 
 1. **The main checkout is never removable.** There is no override.
@@ -89,6 +174,34 @@ question fails the test rather than passing it.
 
 Nothing is ever removed without an explicit selection. `--list` and `--json`
 have no path to the removal code at all.
+
+A refusal names the number you would have to acknowledge, so you cannot give the
+confirmation without having read it:
+
+```
+$ shear --remove /tmp/shear-demo/wt-messy
+shear: refusing /tmp/shear-demo/wt-messy: the worktree has 202 uncommitted files at
+risk. Pass --force-dirty together with --i-understand-202-files to remove it anyway
+shear: 1 of 1 selected worktree refused; nothing was removed
+```
+
+One refusal in a batch stops the whole batch, rather than leaving you to work
+out which half ran. And a removal tells you how to undo it, at the moment it
+happens:
+
+```
+$ shear --remove /tmp/shear-demo/wt-landed
+shear: removing 1 worktree:
+  /tmp/shear-demo/wt-landed [landed] via git
+removed /tmp/shear-demo/wt-landed
+  restore with: git -C /tmp/shear-demo/repo worktree add /tmp/shear-demo/wt-landed landed
+
+$ git -C /tmp/shear-demo/repo rev-parse --short landed
+4280ea5
+```
+
+The branch is still there. That is the whole point, and both of those blocks are
+copied from a real terminal.
 
 ## Install
 
