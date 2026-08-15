@@ -13,7 +13,7 @@ use shear::model::{
     Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, Repo, RepoKey, Size,
     Upstream, Verdict, Worktree,
 };
-use shear::tui::{apply, decode, frame, Key, Mode, Review};
+use shear::tui::{apply, decode, for_raw_terminal, frame, Key, Mode, Review};
 
 // ---------------------------------------------------------------------------
 // Hand-built inventory
@@ -791,4 +791,39 @@ fn every_documented_key_decodes() {
     );
     assert_eq!(decode(b""), Vec::new());
     assert_eq!(decode(b"\x1b[Z"), vec![Key::Other]);
+}
+
+/// The regression test for the one bug this whole suite could not see.
+///
+/// `frame` is pure and joins with `\n`, which is what makes the pane testable
+/// without a terminal — and is exactly why 30 passing tests said nothing about
+/// what a terminal in raw mode actually does with that output. Raw mode turns
+/// off ONLCR, so a bare line feed drops a row without returning to column 0 and
+/// the pane staircases off the side of the screen. It was found by running the
+/// binary in a real herdr pane and looking at it.
+#[test]
+fn every_line_the_pane_writes_ends_in_crlf() {
+    let review = review();
+    let drawn = for_raw_terminal(&frame(&review, 80, 20));
+
+    assert!(
+        drawn.contains("\r\n"),
+        "the frame must carry carriage returns"
+    );
+    // No bare line feed anywhere: in raw mode each one is a staircase step.
+    assert!(
+        !drawn
+            .as_bytes()
+            .windows(2)
+            .any(|pair| pair[1] == b'\n' && pair[0] != b'\r'),
+        "a line feed with no carriage return before it staircases the pane"
+    );
+    assert!(
+        !drawn.starts_with('\n'),
+        "a leading line feed staircases the first row"
+    );
+    // The visible text is untouched: this rewrites line endings and nothing
+    // else, so every assertion elsewhere in this file still describes what a
+    // user sees.
+    assert_eq!(drawn.replace("\r\n", "\n"), frame(&review, 80, 20));
 }

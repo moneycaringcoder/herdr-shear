@@ -696,6 +696,23 @@ const HIDE_CURSOR: &str = "\u{1b}[?25l";
 const SHOW_CURSOR: &str = "\u{1b}[?25h";
 const RESET_ATTRS: &str = "\u{1b}[0m";
 
+/// Rewrites a frame's line endings for a terminal in **raw mode**.
+///
+/// Raw mode turns off `ONLCR`, so a bare `\n` is a line feed and nothing else:
+/// the cursor drops a row without returning to column 0, and every line starts
+/// one column further right than the last until the frame walks off the side of
+/// the pane. Found by running the review pane in a real herdr pane and looking
+/// at it — the whole rendering suite passed throughout, because [`frame`] is
+/// pure and every test reads its `\n`-joined output rather than what reaches a
+/// terminal.
+///
+/// [`frame`] deliberately keeps joining with `\n` so it stays testable without a
+/// terminal. The carriage returns are added here, at the single place that
+/// writes to a real one.
+pub fn for_raw_terminal(frame: &str) -> String {
+    frame.replace('\n', "\r\n")
+}
+
 /// `--review`: the interactive verb.
 pub fn run_review(config: &Config) -> Result<()> {
     let inventory = crate::shear::scan(config)?;
@@ -750,7 +767,7 @@ fn event_loop(
             let (columns, rows) = render::terminal_size();
             let frame = frame(&review, columns, rows.saturating_sub(1).max(1));
             out.write_all(CLEAR_SCREEN.as_bytes())?;
-            out.write_all(frame.as_bytes())?;
+            out.write_all(for_raw_terminal(&frame).as_bytes())?;
             out.flush()?;
             dirty = false;
         }
