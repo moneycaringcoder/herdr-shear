@@ -1,0 +1,247 @@
+# shear
+
+A worktree janitor for [herdr](https://github.com/moneycaringcoder/herdr).
+
+Long-lived agent sessions leave git worktrees behind: one per branch, per
+experiment, per abandoned idea. Most of them are dead and a few of them are not,
+and telling the two apart by hand is tedious enough that nobody does it until
+the disk fills up.
+
+`shear` enumerates every worktree the session knows about, says how dead each
+one looks and what it costs in disk, and removes the ones you pick — never the
+ones you did not.
+
+<!-- EVIDENCE: live run output goes here -->
+
+## What it does
+
+Five verbs. Only two of them can remove anything, and neither does so without an
+explicit selection:
+
+| Verb | What it does |
+| --- | --- |
+| `shear --list` | Prints the inventory and exits. The default, and a dry run by construction. |
+| `shear --json` | The same inventory, machine-readable. |
+| `shear --review` | Interactive review pane: select, confirm, remove. |
+| `shear --remove <PATH>` | Removes one named worktree, subject to every guard below. |
+| `shear --undo-log` | Every removal shear has made, newest first, with the command that restores it. |
+
+The scan is read-only git plumbing (`worktree list`, `status --porcelain=v2`,
+`for-each-ref`) plus one herdr call to find out which checkouts a workspace is
+holding open. If herdr is not reachable, the scan degrades to "no workspace
+information" with a note on screen — never to a silently shorter list.
+
+## Classification
+
+Every worktree carries a set of **classes** — the reasons it looks dead — and
+exactly one **verdict**, which is what shear is willing to do with it.
+
+### Classes
+
+| Class | Meaning |
+| --- | --- |
+| `dirty` | Uncommitted changes: staged, unstaged, untracked or unmerged. Overrides everything for safety. |
+| `locked` | `git worktree lock` was used on it. Somebody's explicit "do not touch this". |
+| `open` | A herdr workspace currently holds this checkout open. |
+| `prunable` | git reports the checkout directory is gone but its admin entry survives. |
+| `gone` | The branch tracks a remote ref that no longer exists (`%(upstream:track)` says `[gone]`). |
+| `merged` | The branch tip is contained in the integration ref. |
+| `stale` | The branch tip is older than the staleness threshold (default 14 days). |
+| `merged?` | The merge question **could not be asked** — no integration ref resolved, or there is no commit to test. Not the same as "not merged". |
+
+`merged?` is a rendering of `Merged::Unknown`, and it is deliberately its own
+token rather than the absence of `merged`. "I asked and the answer is no" and "I
+could not ask" are different facts; a repository with no resolvable default
+branch would otherwise report every worktree as unmerged. Nothing carrying
+`merged?` is ever called safe.
+
+### Verdicts
+
+| Verdict | Meaning |
+| --- | --- |
+| `safe` | Clean, merged into the integration ref, upstream gone, not locked, not open in herdr, not the main checkout. The **only** verdict a bulk action may preselect. |
+| `review` | Some evidence of death, but not all of it. Removable, never preselected. |
+| `keep` | Nothing suggests this is dead. Removable only by explicit selection. |
+| `blocked` | Cannot be removed as things stand — locked, open in herdr, or the main checkout. The row names the unblocking action. |
+
+Every condition in `safe` must be a *positive* observation. An unanswerable
+question fails the test rather than passing it.
+
+## Safety rules
+
+1. **The main checkout is never removable.** There is no override.
+2. **A locked worktree is never removable.** Unlock it yourself with
+   `git worktree unlock`; shear will not do it on your behalf.
+3. **A worktree open in a herdr workspace** is removable only when you have
+   explicitly permitted closing that workspace, and then only through herdr's
+   `worktree.remove`, which closes the workspace as part of the removal. The
+   review pane never does this — it shows you which workspace to close.
+4. **A dirty worktree** is removable only with `--force-dirty`, which itself
+   requires `--i-understand-<N>-files` naming the exact at-risk count. In the
+   review pane, you type that number. A confirmation that can be given without
+   reading the number is not a confirmation.
+5. **Never `rm -rf`.** Removal is `git worktree remove`, or herdr's
+   `worktree.remove` for a checkout herdr holds open. Both leave the branch and
+   every commit on it in place.
+6. **Every removal is logged before it is attempted**, with the HEAD oid and the
+   command that puts the checkout back, so a removal that half-succeeds is still
+   recoverable.
+
+Nothing is ever removed without an explicit selection. `--list` and `--json`
+have no path to the removal code at all.
+
+## Install
+
+As a herdr plugin:
+
+```
+herdr plugin install moneycaringcoder/herdr-shear
+```
+
+For local development, which links the checkout without running the build step:
+
+```
+herdr plugin link /path/to/herdr-shear
+cargo build --release --locked
+```
+
+Or standalone, with no herdr at all:
+
+```
+cargo install --path .
+shear --repo /path/to/repo --list
+```
+
+Requires herdr 0.8.0 or newer for the workspace half; linux and macOS.
+
+## Usage
+
+```
+shear                          # the inventory, as a dry run
+shear --review                 # the interactive pane
+shear --repo ~/src/app --list  # one repository, no session needed
+shear --stale-days 30          # a slower definition of stale
+shear --integration-ref origin/trunk
+shear --no-size                # skip disk measurement entirely
+shear --remove ~/src/app-wt/old-branch
+shear --undo-log
+```
+
+### In the review pane
+
+```
+  ↑ / k        previous row
+  ↓ / j        next row
+  space        toggle the row under the cursor
+  a            select every `safe` row, and nothing else
+  n            clear the selection
+  r            remove the selection, after confirming
+  q / Esc      quit without removing anything
+```
+
+`a` *replaces* the selection with exactly the safe rows, so it can never leave
+something unsafe selected by accident. The main checkout cannot be selected at
+all.
+
+A clean selection is confirmed once, by count and by bytes. A selection that
+contains anything dirty gets a second, differently worded confirmation that
+names the exact number of at-risk files and requires you to type that number.
+
+## Configuration
+
+`~/.config/herdr/plugins/config/moneycaringcoder.shear/config.json`, every key
+optional:
+
+```json
+{
+  "integration_ref": "origin/main",
+  "stale_days": 14,
+  "git_timeout_seconds": 10,
+  "measure_disk": true,
+  "extra_repos": ["/home/you/src/other-repo"]
+}
+```
+
+The undo log lives at
+`~/.local/state/herdr/plugins/moneycaringcoder.shear/removed.jsonl`.
+
+## Design decisions
+
+### The review surface is an overlay pane, not a popup
+
+The pane is a *working surface*. You scan forty rows, build up a selection over
+a minute or two, and only then confirm something destructive. A popup is
+dismissed by a stray key — and losing a selection to a mis-key is worse than
+having to press `q` on purpose. An overlay pane survives the mis-key, keeps its
+own scrollback, and sits alongside the rest of the session rather than on top of
+it.
+
+The same reasoning drives the terminal discipline: raw mode is entered exactly
+once and restored from `Drop`, from a panic hook, and from SIGINT/SIGTERM. A
+janitor that leaves somebody's pane in raw mode has done more damage than the
+worktrees it removed.
+
+### shear never deletes branches, only checkouts
+
+Removing a worktree leaves its branch and every commit on it intact. That is not
+a caveat, it is the whole reason this is a tool you can let loose on a session:
+the worst case for a wrong pick is `git worktree add` and a few seconds of
+disk I/O, not lost work. The sentence is printed under every table and kept on
+screen in the review pane while you are deciding, because an action feels safe
+only if you can see *why* it is safe at the moment you take it.
+
+Consequently there is no `--delete-branch`, no `--prune-all`, and no bulk mode
+that removes without a selection. A tool that also deleted branches would need a
+different name and a much less cheerful README.
+
+### Disk savings are shown twice, and never rounded up
+
+Per row, because that is what justifies removing a *particular* worktree; and as
+a total, because that is what makes anyone bother running a janitor in the first
+place. Sizes are the space actually occupied on disk (`st_blocks * 512`, what
+`du` reports), with hardlinks counted once and symlinks never followed.
+
+Three things a size column must not do, and does not:
+
+- A **failed** measurement renders `?`, never a plausible `0 B`.
+- A **pending** measurement renders a dot leader, because the pane draws before
+  the walk finishes and a zero that later becomes 1.2 GB is a lie with a delay.
+- A **missing** checkout renders `-`: a prunable worktree reclaims nothing.
+
+Totals only add up rows that were actually measured, and the summary says how
+many were not — "2 worktrees could not be measured, so that figure is a floor,
+not an estimate" — rather than quietly undercounting. Byte figures are truncated
+rather than rounded, so the number never overstates what you get back.
+
+### The table is sized from its content, and never overflows
+
+Columns are computed from what is actually in them, so a session of short paths
+does not get a table laid out for long ones. When the pane is too narrow to hold
+everything, whole columns are dropped in reverse order of how much they justify
+a decision — branch, then classes, then age, then disk — rather than every
+column being squeezed until none of them can be read. Paths truncate from the
+**left**, because the tail is the informative half; branches and labels truncate
+from the right.
+
+No line is ever wider than the width it was given, at any width down to 40
+columns. That is not an aspiration; `tests/render.rs` asserts it at every width
+from 40 to 200.
+
+## Development
+
+```
+cargo build --locked
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
+cargo fmt --all -- --check
+```
+
+`tests/render.rs` and `tests/tui.rs` build their inventories by hand and need
+neither a repository nor a running herdr, so the rendering and the whole review
+state machine — including both confirmations for a dirty removal — are testable
+without a terminal. The other suites use real repositories built by
+`tests/fixtures.rs`.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

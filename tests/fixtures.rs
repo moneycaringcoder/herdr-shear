@@ -32,13 +32,36 @@ impl Drop for Fixture {
     }
 }
 
+/// Pins the git environment for the **test process itself**, not just for the
+/// commands the fixtures run.
+///
+/// [`base_env`] covers fixture construction, but the code under test spawns its
+/// own `git` and deliberately does not scrub `GIT_CONFIG_GLOBAL` — a user's
+/// config is a fact about their repository, not interference. That is right in
+/// production and wrong in a test: a developer with `core.excludesFile` set
+/// would see the untracked files a fixture creates silently ignored, and the
+/// suite would be green about the wrong thing.
+///
+/// Called at the top of every test. The write happens exactly once per process.
+pub fn pin_git_env() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for (key, value) in base_env() {
+            std::env::set_var(key, value);
+        }
+    });
+}
+
 fn scratch_root() -> PathBuf {
     // Honour the harness's scratch directory when there is one, so a test run
     // never litters the user's temp dir with repositories.
-    std::env::var_os("SHEAR_TEST_DIR")
+    let base = std::env::var_os("SHEAR_TEST_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("shear-fixtures")
+        .unwrap_or_else(std::env::temp_dir);
+    // Resolved once, here: on a machine where the temp dir is a symlink (macOS
+    // `/tmp`), git reports the resolved path and a test comparing against the
+    // unresolved one would fail for a reason that has nothing to do with shear.
+    base.canonicalize().unwrap_or(base).join("shear-fixtures")
 }
 
 impl Fixture {
@@ -194,12 +217,77 @@ impl Fixture {
     /// A worktree whose branch is deleted underneath it: `HEAD 0000…` with a
     /// non-empty `logs/HEAD`, which is the only thing that distinguishes it from
     /// an unborn worktree.
+    ///
+    /// `git branch -D` cannot build this shape: verified on git 2.53.0, it
+    /// refuses with "cannot delete branch 'x' used by worktree at …" and exits
+    /// non-zero. `update-ref -d` performs the same deletion without the worktree
+    /// check, which is exactly how a user gets into this state in the first
+    /// place — from another clone, or from a tool that writes refs directly.
+    /// Both are on a fixture branch inside a scratch directory, never anything
+    /// of the user's.
     pub fn broken_head_worktree(&self, name: &str) -> PathBuf {
         let branch = format!("{name}-branch");
         let path = self.add_worktree(name, &["-b", &branch]);
-        // `-D` on a fixture branch inside a scratch directory, not on anything
-        // of the user's.
-        self.git(&self.repo, &["branch", "-D", &branch]);
+        self.git(
+            &self.repo,
+            &["update-ref", "-d", &format!("refs/heads/{branch}")],
+        );
+        path
+    }
+
+    /// A worktree that has never had a commit checked out: `HEAD 0000…` with a
+    /// `branch` line, exactly like [`Self::broken_head_worktree`], and with **no**
+    /// `logs/HEAD`. The pair exists so the reflog discriminator is tested against
+    /// both halves of the ambiguity rather than only the interesting one.
+    pub fn unborn_worktree(&self, name: &str) -> PathBuf {
+        let path = self.root.join(format!("wt-{name}"));
+        let path_str = path.to_string_lossy().into_owned();
+        self.git(
+            &self.repo,
+            &["worktree", "add", "-q", "--orphan", &path_str],
+        );
+        path
+    }
+
+    /// `git worktree lock`ed with no `--reason`, which git reports as the bare
+    /// word `locked` with nothing after it — a different fact from an empty
+    /// reason, and the record a parser that splits on the first space gets wrong.
+    pub fn locked_worktree_no_reason(&self, name: &str) -> PathBuf {
+        let branch = format!("{name}-branch");
+        let path = self.add_worktree(name, &["-b", &branch]);
+        let path_str = path.to_string_lossy().into_owned();
+        self.git(&self.repo, &["worktree", "lock", &path_str]);
+        path
+    }
+
+    /// A worktree with an unmerged index, for the `u` status record. Left
+    /// mid-merge deliberately: the conflict markers are the dirt.
+    pub fn conflicted_worktree(&self, name: &str) -> PathBuf {
+        let branch = format!("{name}-branch");
+        let path = self.add_worktree(name, &["-b", &branch]);
+        self.write(&path, "clash.txt", "theirs\n");
+        self.git(&path, &["add", "-A"]);
+        self.commit(&path, "theirs");
+        // A second commit on main touching the same file, so merging conflicts.
+        self.write(&self.repo, "clash.txt", "ours\n");
+        self.git(&self.repo, &["add", "-A"]);
+        self.commit(&self.repo, "ours");
+        // Expected to fail with a conflict; the failure is the fixture.
+        let _ = self.try_git(&path, &["merge", "--no-edit", "main"]);
+        path
+    }
+
+    /// A repository in which no integration ref can resolve: its only branch is
+    /// `trunk`, it has no remote, and so neither `origin/HEAD` nor any of
+    /// [`shear::config::DEFAULT_BRANCH_GUESSES`] names anything. Nothing in it
+    /// can be called merged, and therefore nothing in it can be called safe.
+    pub fn no_integration_repo(&self, name: &str) -> PathBuf {
+        let path = self.root.join(name);
+        std::fs::create_dir_all(&path).expect("create repo with no integration ref");
+        run(&path, "git", &["init", "-q", "-b", "trunk", "."]);
+        self.write(&path, "only.txt", "no default branch here\n");
+        self.git(&path, &["add", "-A"]);
+        self.commit(&path, "trunk");
         path
     }
 

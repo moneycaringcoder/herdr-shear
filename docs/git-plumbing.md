@@ -56,13 +56,27 @@ Points that a hand-written parser gets wrong:
   on the first space and taking the remainder yields an empty-string reason that
   is not the same as "no reason given".
 - The **broken-head** record still carries `branch refs/heads/broken-branch`
-  even though that ref was deleted. The branch line is not the discriminator.
-  What distinguishes an unborn worktree from one whose branch was deleted
-  underneath it is the worktree's own HEAD reflog: a worktree that ever had a
-  commit checked out has `logs/HEAD`, a freshly initialised one does not.
-  (`symbolic-ref -q HEAD` does **not** distinguish them: it exits 0 and prints
-  the same ref name in both cases.)
+  even though that ref was deleted — and so does a genuinely **unborn** one:
+  `git worktree add --orphan` prints `HEAD 0000…0000` *and* a `branch` line.
+  The branch line is present in both halves of the ambiguity and discriminates
+  nothing.
+
+  What does distinguish them is the worktree's own HEAD reflog: a worktree that
+  ever had a commit checked out has `logs/HEAD`, a freshly initialised one does
+  not. Two plausible substitutes were tried and both fail:
+
+  | attempt | why it fails |
+  |---|---|
+  | `symbolic-ref -q HEAD` | exits 0 and prints the same ref name in both cases |
+  | `rev-parse -q --verify 'HEAD@{0}'` | exits 1 in the broken-head worktree — exactly the case it would have to detect — because HEAD itself no longer resolves |
+
+  Reading `<worktree-git-dir>/logs/HEAD` is the only test that works. It is not
+  backend-agnostic, and there is no alternative that is.
 - A `bare` record has no `HEAD` and no `branch`.
+- `prunable` carried a reason in every observed case on git 2.53.0, but nothing
+  promises one, so it is modelled the same way as `locked`: a flag that may or
+  may not carry text, never a plain string that would conflate "no reason given"
+  with "the reason is empty".
 
 ## Upstream and staleness, in one call
 
@@ -85,6 +99,11 @@ stale-branch   → 301ef44… →                                   →         
 that no longer exists. That string is the detection. Do **not** try to infer it
 from a missing remote ref: a remote that has simply never been fetched looks
 identical.
+
+`[gone]` and `[ahead 2]` are **not localized** — both came back verbatim under
+`LC_ALL` of `C`, `en_US.UTF-8`, `de_DE.UTF-8` and `fr_FR.UTF-8`. So `git.rs`
+deliberately does not pin `LC_ALL`, which keeps git's own error messages in the
+user's own language when one surfaces in the interface.
 
 A branch with no upstream configured at all yields two empty fields, which is a
 third state — "never pushed" — and not the same as `[gone]`. Only `[gone]` is
@@ -137,6 +156,12 @@ field. `tests/capture/status-v2.z` contains one, plus an untracked file whose
 name holds a literal newline, so anything splitting on lines parses it as two
 entries and reports a file that does not exist.
 
+**And the trap behind that one:** the stream ends with a NUL, so splitting on
+NUL leaves an empty final field. "A next field exists" is therefore not a
+sufficient check for a `2` record's original path — it must also be non-empty,
+or a truncated rename silently swallows the empty tail and reports plausible
+dirt on a worktree that has none.
+
 `X` is the index status, `Y` the worktree status. shear counts them separately:
 `X` non-`.` is staged, `Y` non-`.` is unstaged, `u` is unmerged, `?` is
 untracked. The second confirmation for a dirty removal names these numbers, and
@@ -173,6 +198,11 @@ user will check the number against. Apparent size (`st_size`) would overstate a
 sparse file and understate the block padding across thousands of small source
 files.
 
+`du -h`'s rounding is also worth copying exactly, since the whole point is that
+the two numbers agree: powers of 1024, rounding **up**, one decimal place only
+while the scaled value is below ten, rescaling when rounding up would print 1024
+of a unit. So 1536 is `1.5K`, 10240 is `10K`, 12000 is `12K`.
+
 A prunable worktree's directory does not exist, so it reclaims nothing. Saying
 `0 B` and saying "gone" are different claims and the table distinguishes them.
 
@@ -183,6 +213,12 @@ A prunable worktree's directory does not exist, so it reclaims nothing. Saying
 | detached HEAD | `worktree list` → `detached` | classified on the commit, never on a branch |
 | unborn branch | `HEAD 0000…` and **no** `logs/HEAD` | never a candidate; the row says why |
 | branch deleted underneath | `HEAD 0000…` and a non-empty `logs/HEAD` | reported as broken, offered only under `review` |
+
+Building the last of those as a fixture has a trap of its own: **`git branch -D`
+cannot do it.** On git 2.53.0 it refuses with `error: cannot delete branch 'x'
+used by worktree at …` and exits 1, precisely because a worktree has it checked
+out. `git update-ref -d refs/heads/<branch>` performs the same deletion without
+the worktree check, and is what `tests/fixtures.rs` uses.
 | bare | `bare` record | skipped entirely |
 | foreign repo | differing `--git-common-dir` | never grouped with another repo's worktrees |
 | main checkout | first record of the repo | never a candidate, no override |

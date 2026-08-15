@@ -77,16 +77,33 @@ pub struct Worktree {
     /// `Some(reason)` when git reports `locked`. The reason is `None` when git
     /// gave the flag with no text, which it does for a bare `git worktree lock`.
     pub locked: Option<LockInfo>,
-    /// `Some(reason)` when git reports `prunable`, e.g. "gitdir file points to
-    /// non-existent location".
-    pub prunable: Option<String>,
+    /// `Some(_)` when git reports `prunable`, e.g. with the reason "gitdir file
+    /// points to non-existent location".
+    pub prunable: Option<PrunableInfo>,
     /// Anything read that the user should see but that is not a classification —
     /// a failed sub-command, an ambiguous state.
     pub notes: Vec<String>,
 }
 
+/// `locked` and `prunable` are the two `worktree list` attributes that may or
+/// may not carry a reason, and both use the same shape for the same reason:
+/// `Option<String>` alone cannot distinguish "flagged, no reason given" from
+/// "the reason is the empty string", and the flag itself is the load-bearing
+/// half.
+///
+/// git 2.53.0 always supplies a reason for `prunable` and supplies one for
+/// `locked` only when `git worktree lock --reason` was used. Neither is
+/// promised, so neither is assumed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockInfo {
+    pub reason: Option<String>,
+}
+
+/// See [`LockInfo`]. The reason matters here as much as the flag: "gitdir file
+/// points to non-existent location" is also what a temporarily unmounted
+/// filesystem looks like, so it is shown verbatim rather than summarised.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrunableInfo {
     pub reason: Option<String>,
 }
 

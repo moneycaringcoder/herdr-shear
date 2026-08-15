@@ -272,8 +272,19 @@ fn discover(
     for path in &config.extra_repos {
         push_repo_at(path, config, &mut repos, notes);
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        push_repo_at(&cwd, config, &mut repos, notes);
+
+    // The current directory is included only when it could be the user's
+    // choice. herdr runs a plugin action with cwd set to the *plugin's* own
+    // directory, so including it there would put shear's own repository in
+    // every listing — a row nobody asked for, in a tool whose entire job is to
+    // be trusted about which rows matter. Running the binary from a shell is
+    // different: there, the repository you are standing in is the obvious one
+    // to mean.
+    let invoked_by_herdr = crate::config::non_empty_env("HERDR_PLUGIN_ID").is_some();
+    if !invoked_by_herdr || repos.is_empty() {
+        if let Ok(cwd) = std::env::current_dir() {
+            push_repo_at(&cwd, config, &mut repos, notes);
+        }
     }
 
     Ok((repos, open))
