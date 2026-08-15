@@ -1,0 +1,70 @@
+{
+  "id": "cli:worktree:list",
+  "result": {
+    "source": {
+      "repo_key": "/repos/repo/.git",
+      "repo_name": "repo",
+      "repo_root": "/repos/repo",
+      "source_checkout_path": "/repos/repo",
+      "source_workspace_id": "w17"
+    },
+    "type": "worktree_list",
+    "worktrees": [
+      {
+        "branch": "main",
+        "is_bare": false,
+        "is_detached": false,
+        "is_linked_worktree": false,
+        "is_prunable": false,
+        "label": "repo",
+        "open_workspace_id": "w17",
+        "path": "/repos/repo"
+      },
+      {
+        "is_bare": false,
+        "is_detached": true,
+        "is_linked_worktree": true,
+        "is_prunable": false,
+        "label": "repo",
+        "path": "/repos/wt-detached"
+      },
+      {
+        "branch": "dirty",
+        "is_bare": false,
+        "is_detached": false,
+        "is_linked_worktree": true,
+        "is_prunable": false,
+        "label": "repo",
+        "path": "/repos/wt-dirty"
+      },
+      {
+        "branch": "live",
+        "is_bare": false,
+        "is_detached": false,
+        "is_linked_worktree": true,
+        "is_prunable": false,
+        "label": "repo",
+        "open_workspace_id": "w18",
+        "path": "/repos/wt-live"
+      },
+      {
+        "branch": "lockedbr",
+        "is_bare": false,
+        "is_detached": false,
+        "is_linked_worktree": true,
+        "is_prunable": false,
+        "label": "repo",
+        "path": "/repos/wt-locked"
+      },
+      {
+        "branch": "stale",
+        "is_bare": false,
+        "is_detached": false,
+        "is_linked_worktree": true,
+        "is_prunable": false,
+        "label": "repo",
+        "path": "/repos/wt-stale"
+      }
+    ]
+  }
+}

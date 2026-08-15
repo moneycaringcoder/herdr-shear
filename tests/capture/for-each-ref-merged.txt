@@ -1,0 +1,7 @@
+dirty-branch
+goner-branch
+locked-branch
+locked2-branch
+main
+merged-branch
+safe-branch

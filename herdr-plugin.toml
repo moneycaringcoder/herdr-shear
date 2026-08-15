@@ -1,0 +1,57 @@
+# herdr plugin: shear
+#
+# A worktree janitor. Lists every git worktree the session knows about,
+# classifies how dead each one is, shows what it costs in disk, and removes the
+# ones you pick.
+#
+# Install:   herdr plugin install moneycaringcoder/herdr-shear
+# Local dev: herdr plugin link /path/to/herdr-shear   (does NOT run [[build]])
+# Remove:    herdr plugin unlink moneycaringcoder.shear
+# Logs:      herdr plugin log list --plugin moneycaringcoder.shear
+
+id = "moneycaringcoder.shear"
+name = "Shear"
+version = "0.1.0"
+# Oldest herdr carrying every API this plugin calls: `worktree.list` with its
+# `open_workspace_id` field, `worktree.remove`, and `workspace.close`.
+# Developed and verified against 0.8.0 / protocol 19.
+min_herdr_version = "0.8.0"
+description = "Find the git worktrees that are safe to delete, and delete those."
+platforms = ["linux", "macos"]
+
+# Commands are argv arrays run with no shell and a minimal PATH, with the plugin
+# root as cwd. Compiled once at install time; the resulting binary is what every
+# command below invokes.
+[[build]]
+command = ["cargo", "build", "--release", "--locked"]
+
+# The review surface is an overlay pane rather than a popup, deliberately: it is
+# a working surface where a user scans rows, builds a selection, and then
+# confirms something destructive. A popup is dismissed by a stray key, and losing
+# a selection to a mis-key is worse than having to press `q`.
+[[panes]]
+id = "review"
+title = "Shear: review worktrees"
+placement = "overlay"
+command = ["./target/release/shear", "--review"]
+
+[[actions]]
+id = "list"
+title = "Shear: list worktrees"
+description = "Dry-run inventory of every worktree the session knows about."
+contexts = ["global", "workspace"]
+command = ["./target/release/shear", "--list"]
+
+[[actions]]
+id = "json"
+title = "Shear: JSON snapshot"
+description = "Machine-readable inventory for scripting."
+contexts = ["global", "workspace"]
+command = ["./target/release/shear", "--json"]
+
+[[actions]]
+id = "undo-log"
+title = "Shear: removal history"
+description = "Every worktree shear has removed, and the command that restores it."
+contexts = ["global"]
+command = ["./target/release/shear", "--undo-log"]

@@ -1,0 +1,992 @@
+{
+  "id": "cli:api:snapshot",
+  "result": {
+    "snapshot": {
+      "agents": [
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "idle",
+          "cwd": "/home/you/repos",
+          "focused": true,
+          "foreground_cwd": "/home/you/.local/share/mise/installs/node/24.18.0/lib/node_modules/pyright/dist",
+          "pane_id": "wM:p1",
+          "revision": 1545,
+          "state_change_seq": 764,
+          "tab_id": "wM:t1",
+          "terminal_id": "term_659196a4d67231d",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 49% (488k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "herdr takeover"
+          },
+          "workspace_id": "wM"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/workspaces/rodolphe-research",
+          "focused": false,
+          "foreground_cwd": "/home/you/workspaces/rodolphe-research",
+          "pane_id": "w3:p1",
+          "revision": 6183,
+          "state_change_seq": 753,
+          "tab_id": "w3:t1",
+          "terminal_id": "term_659111c6634813",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 17% (166k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "cpo research"
+          },
+          "workspace_id": "w3"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/repos/crescendo",
+          "display_agent": "\u2726 Claude",
+          "focused": false,
+          "foreground_cwd": "/home/you/repos/crescendo",
+          "pane_id": "w6:p1",
+          "revision": 1418,
+          "state_change_seq": 752,
+          "tab_id": "w6:t1",
+          "terminal_id": "term_6591127b6323a6",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 16% (165k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "opus orch (claude)"
+          },
+          "workspace_id": "w6"
+        },
+        {
+          "agent": "opencode",
+          "agent_status": "idle",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "name": "media-throughput",
+          "pane_id": "wE:p1",
+          "revision": 6,
+          "state_change_seq": 549,
+          "tab_id": "wE:t1",
+          "terminal_id": "term_659126a97d066f",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "provider": "opencode",
+            "title": "media-throughput"
+          },
+          "workspace_id": "wE"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "idle",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "interactive_ready": true,
+          "name": "rev-media",
+          "pane_id": "wE:p2",
+          "revision": 195,
+          "state_change_seq": 513,
+          "tab_id": "wE:t1",
+          "terminal_id": "term_65912a487007b13",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 50% (100k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "media-throughput"
+          },
+          "workspace_id": "wE"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "idle",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "interactive_ready": true,
+          "name": "promote-budget",
+          "pane_id": "wY:p1",
+          "revision": 30,
+          "state_change_seq": 732,
+          "tab_id": "wY:t1",
+          "terminal_id": "term_6591b6fab94142a",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 22% (218k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "promote-budget"
+          },
+          "workspace_id": "wY"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "interactive_ready": true,
+          "name": "rev-promote",
+          "pane_id": "wY:p2",
+          "revision": 122,
+          "state_change_seq": 759,
+          "tab_id": "wY:t1",
+          "terminal_id": "term_6591cc50556af31",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "promote-budget"
+          },
+          "workspace_id": "wY"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/repos/herdr-shear",
+          "focused": false,
+          "foreground_cwd": "/home/you/repos/herdr-shear",
+          "interactive_ready": true,
+          "name": "shearlead",
+          "pane_id": "w15:p1",
+          "revision": 45,
+          "state_change_seq": 762,
+          "tab_id": "w15:t1",
+          "terminal_id": "term_6591cc53818a132",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 8% (82k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "shear"
+          },
+          "workspace_id": "w15"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/repos/herdr-redact",
+          "focused": false,
+          "foreground_cwd": "/home/you/repos/herdr-redact",
+          "interactive_ready": true,
+          "name": "redactlead",
+          "pane_id": "w16:p1",
+          "revision": 41,
+          "state_change_seq": 763,
+          "tab_id": "w16:t1",
+          "terminal_id": "term_6591cc5384f5133",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 5% (53k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "redact"
+          },
+          "workspace_id": "w16"
+        }
+      ],
+      "focused_pane_id": "wM:p1",
+      "focused_tab_id": "wM:t1",
+      "focused_workspace_id": "wM",
+      "layouts": [
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "wM:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "wM:p1",
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "splits": [],
+          "tab_id": "wM:t1",
+          "workspace_id": "wM",
+          "zoomed": false
+        },
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "w3:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "w3:p1",
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "splits": [],
+          "tab_id": "w3:t1",
+          "workspace_id": "w3",
+          "zoomed": false
+        },
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "w6:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "w6:p1",
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "splits": [],
+          "tab_id": "w6:t1",
+          "workspace_id": "w6",
+          "zoomed": false
+        },
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "wE:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "wE:p1",
+              "rect": {
+                "height": 21,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            },
+            {
+              "focused": false,
+              "pane_id": "wE:p2",
+              "rect": {
+                "height": 32,
+                "width": 155,
+                "x": 30,
+                "y": 22
+              }
+            }
+          ],
+          "splits": [
+            {
+              "direction": "down",
+              "id": "split_0_root",
+              "ratio": 0.4,
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "tab_id": "wE:t1",
+          "workspace_id": "wE",
+          "zoomed": false
+        },
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "wY:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "wY:p1",
+              "rect": {
+                "height": 21,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            },
+            {
+              "focused": false,
+              "pane_id": "wY:p2",
+              "rect": {
+                "height": 32,
+                "width": 155,
+                "x": 30,
+                "y": 22
+              }
+            }
+          ],
+          "splits": [
+            {
+              "direction": "down",
+              "id": "split_0_root",
+              "ratio": 0.4,
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "tab_id": "wY:t1",
+          "workspace_id": "wY",
+          "zoomed": false
+        },
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "w0:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "w0:p1",
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "splits": [],
+          "tab_id": "w0:t1",
+          "workspace_id": "w0",
+          "zoomed": false
+        },
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "w15:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "w15:p1",
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "splits": [],
+          "tab_id": "w15:t1",
+          "workspace_id": "w15",
+          "zoomed": false
+        },
+        {
+          "area": {
+            "height": 53,
+            "width": 155,
+            "x": 30,
+            "y": 1
+          },
+          "focused_pane_id": "w16:p1",
+          "panes": [
+            {
+              "focused": true,
+              "pane_id": "w16:p1",
+              "rect": {
+                "height": 53,
+                "width": 155,
+                "x": 30,
+                "y": 1
+              }
+            }
+          ],
+          "splits": [],
+          "tab_id": "w16:t1",
+          "workspace_id": "w16",
+          "zoomed": false
+        }
+      ],
+      "panes": [
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "idle",
+          "cwd": "/home/you/repos",
+          "focused": true,
+          "foreground_cwd": "/home/you/.local/share/mise/installs/node/24.18.0/lib/node_modules/pyright/dist",
+          "pane_id": "wM:p1",
+          "revision": 1545,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 53
+          },
+          "tab_id": "wM:t1",
+          "terminal_id": "term_659196a4d67231d",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 49% (488k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "herdr takeover"
+          },
+          "workspace_id": "wM"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/workspaces/rodolphe-research",
+          "focused": false,
+          "foreground_cwd": "/home/you/workspaces/rodolphe-research",
+          "pane_id": "w3:p1",
+          "revision": 6183,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 53
+          },
+          "tab_id": "w3:t1",
+          "terminal_id": "term_659111c6634813",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 17% (166k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "cpo research"
+          },
+          "workspace_id": "w3"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/repos/crescendo",
+          "display_agent": "\u2726 Claude",
+          "focused": false,
+          "foreground_cwd": "/home/you/repos/crescendo",
+          "pane_id": "w6:p1",
+          "revision": 1418,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 53
+          },
+          "tab_id": "w6:t1",
+          "terminal_id": "term_6591127b6323a6",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 16% (165k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "opus orch (claude)"
+          },
+          "workspace_id": "w6"
+        },
+        {
+          "agent": "opencode",
+          "agent_status": "idle",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "pane_id": "wE:p1",
+          "revision": 6,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 19
+          },
+          "tab_id": "wE:t1",
+          "terminal_id": "term_659126a97d066f",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "provider": "opencode",
+            "title": "media-throughput"
+          },
+          "workspace_id": "wE"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "idle",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+          "pane_id": "wE:p2",
+          "revision": 195,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 30
+          },
+          "tab_id": "wE:t1",
+          "terminal_id": "term_65912a487007b13",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 50% (100k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "media-throughput"
+          },
+          "workspace_id": "wE"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "idle",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "pane_id": "wY:p1",
+          "revision": 30,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 19
+          },
+          "tab_id": "wY:t1",
+          "terminal_id": "term_6591b6fab94142a",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 22% (218k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "promote-budget"
+          },
+          "workspace_id": "wY"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "focused": false,
+          "foreground_cwd": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+          "pane_id": "wY:p2",
+          "revision": 122,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 30
+          },
+          "tab_id": "wY:t1",
+          "terminal_id": "term_6591cc50556af31",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "promote-budget"
+          },
+          "workspace_id": "wY"
+        },
+        {
+          "agent_status": "unknown",
+          "cwd": "/home/you/repos/herdr-collide",
+          "focused": false,
+          "foreground_cwd": "/home/you/repos/herdr-collide",
+          "pane_id": "w0:p1",
+          "revision": 0,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 53
+          },
+          "tab_id": "w0:t1",
+          "terminal_id": "term_6591c61efdb412c",
+          "workspace_id": "w0"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/repos/herdr-shear",
+          "focused": false,
+          "foreground_cwd": "/home/you/repos/herdr-shear",
+          "pane_id": "w15:p1",
+          "revision": 45,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 53
+          },
+          "tab_id": "w15:t1",
+          "terminal_id": "term_6591cc53818a132",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 8% (82k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "shear"
+          },
+          "workspace_id": "w15"
+        },
+        {
+          "agent": "claude",
+          "agent_session": {
+            "agent": "claude",
+            "kind": "id",
+            "source": "herdr:claude",
+            "value": "00000000-0000-0000-0000-000000000000"
+          },
+          "agent_status": "working",
+          "cwd": "/home/you/repos/herdr-redact",
+          "focused": false,
+          "foreground_cwd": "/home/you/repos/herdr-redact",
+          "pane_id": "w16:p1",
+          "revision": 41,
+          "scroll": {
+            "max_offset_from_bottom": 0,
+            "offset_from_bottom": 0,
+            "viewport_rows": 53
+          },
+          "tab_id": "w16:t1",
+          "terminal_id": "term_6591cc5384f5133",
+          "terminal_title": "agent pane",
+          "terminal_title_stripped": "agent pane",
+          "tokens": {
+            "context": "\u26c1 5% (53k)",
+            "limit": "5h 100%",
+            "provider": "claude",
+            "title": "redact"
+          },
+          "workspace_id": "w16"
+        }
+      ],
+      "protocol": 19,
+      "tabs": [
+        {
+          "agent_status": "idle",
+          "focused": true,
+          "label": "1",
+          "number": 1,
+          "pane_count": 1,
+          "tab_id": "wM:t1",
+          "workspace_id": "wM"
+        },
+        {
+          "agent_status": "working",
+          "focused": false,
+          "label": "1",
+          "number": 1,
+          "pane_count": 1,
+          "tab_id": "w3:t1",
+          "workspace_id": "w3"
+        },
+        {
+          "agent_status": "working",
+          "focused": false,
+          "label": "1",
+          "number": 1,
+          "pane_count": 1,
+          "tab_id": "w6:t1",
+          "workspace_id": "w6"
+        },
+        {
+          "agent_status": "idle",
+          "focused": false,
+          "label": "1",
+          "number": 1,
+          "pane_count": 2,
+          "tab_id": "wE:t1",
+          "workspace_id": "wE"
+        },
+        {
+          "agent_status": "working",
+          "focused": false,
+          "label": "1",
+          "number": 1,
+          "pane_count": 2,
+          "tab_id": "wY:t1",
+          "workspace_id": "wY"
+        },
+        {
+          "agent_status": "unknown",
+          "focused": false,
+          "label": "1",
+          "number": 1,
+          "pane_count": 1,
+          "tab_id": "w0:t1",
+          "workspace_id": "w0"
+        },
+        {
+          "agent_status": "working",
+          "focused": false,
+          "label": "1",
+          "number": 1,
+          "pane_count": 1,
+          "tab_id": "w15:t1",
+          "workspace_id": "w15"
+        },
+        {
+          "agent_status": "working",
+          "focused": false,
+          "label": "1",
+          "number": 1,
+          "pane_count": 1,
+          "tab_id": "w16:t1",
+          "workspace_id": "w16"
+        }
+      ],
+      "version": "0.8.0",
+      "workspaces": [
+        {
+          "active_tab_id": "wM:t1",
+          "agent_status": "idle",
+          "focused": true,
+          "label": "herdr takeover",
+          "number": 1,
+          "pane_count": 1,
+          "tab_count": 1,
+          "workspace_id": "wM"
+        },
+        {
+          "active_tab_id": "w3:t1",
+          "agent_status": "working",
+          "focused": false,
+          "label": "cpo research",
+          "number": 2,
+          "pane_count": 1,
+          "tab_count": 1,
+          "tokens": {
+            "git_dirty": "~55 ?45"
+          },
+          "workspace_id": "w3"
+        },
+        {
+          "active_tab_id": "w6:t1",
+          "agent_status": "working",
+          "focused": false,
+          "label": "opus orch (claude)",
+          "number": 3,
+          "pane_count": 1,
+          "tab_count": 1,
+          "workspace_id": "w6",
+          "worktree": {
+            "checkout_path": "/home/you/repos/crescendo",
+            "is_linked_worktree": false,
+            "repo_key": "/home/you/repos/crescendo/.git",
+            "repo_name": "crescendo",
+            "repo_root": "/home/you/repos/crescendo"
+          }
+        },
+        {
+          "active_tab_id": "wE:t1",
+          "agent_status": "idle",
+          "focused": false,
+          "label": "media-throughput",
+          "number": 4,
+          "pane_count": 2,
+          "tab_count": 1,
+          "workspace_id": "wE",
+          "worktree": {
+            "checkout_path": "/home/you/.herdr/worktrees/crescendo/fix-media-fetch-throughput",
+            "is_linked_worktree": true,
+            "repo_key": "/home/you/repos/crescendo/.git",
+            "repo_name": "crescendo",
+            "repo_root": "/home/you/repos/crescendo"
+          }
+        },
+        {
+          "active_tab_id": "wY:t1",
+          "agent_status": "working",
+          "focused": false,
+          "label": "promote-budget",
+          "number": 5,
+          "pane_count": 2,
+          "tab_count": 1,
+          "workspace_id": "wY",
+          "worktree": {
+            "checkout_path": "/home/you/.herdr/worktrees/crescendo/fix-mart-promote-budget",
+            "is_linked_worktree": true,
+            "repo_key": "/home/you/repos/crescendo/.git",
+            "repo_name": "crescendo",
+            "repo_root": "/home/you/repos/crescendo"
+          }
+        },
+        {
+          "active_tab_id": "w0:t1",
+          "agent_status": "unknown",
+          "focused": false,
+          "label": "herdr-collide",
+          "number": 6,
+          "pane_count": 1,
+          "tab_count": 1,
+          "tokens": {
+            "git_clean": "\u2713"
+          },
+          "workspace_id": "w0",
+          "worktree": {
+            "checkout_path": "/home/you/repos/herdr-collide/.",
+            "is_linked_worktree": false,
+            "repo_key": "/home/you/repos/herdr-collide/.git",
+            "repo_name": "herdr-collide",
+            "repo_root": "/home/you/repos/herdr-collide/."
+          }
+        },
+        {
+          "active_tab_id": "w15:t1",
+          "agent_status": "working",
+          "focused": false,
+          "label": "shear",
+          "number": 7,
+          "pane_count": 1,
+          "tab_count": 1,
+          "tokens": {
+            "git_dirty": "?2"
+          },
+          "workspace_id": "w15"
+        },
+        {
+          "active_tab_id": "w16:t1",
+          "agent_status": "working",
+          "focused": false,
+          "label": "redact",
+          "number": 8,
+          "pane_count": 1,
+          "tab_count": 1,
+          "tokens": {
+            "git_dirty": "?2"
+          },
+          "workspace_id": "w16"
+        }
+      ]
+    },
+    "type": "session_snapshot"
+  }
+}
