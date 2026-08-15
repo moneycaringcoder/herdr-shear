@@ -465,7 +465,7 @@ pub fn run_remove(config: &Config, args: &[String]) -> Result<()> {
     );
     for candidate in &selected {
         println!(
-            "  {} [{}] via {}{}",
+            "  {} [{}] via {}{}{}",
             candidate.path().display(),
             candidate.branch().unwrap_or("no branch"),
             route_label(route_for(candidate)),
@@ -475,7 +475,8 @@ pub fn run_remove(config: &Config, args: &[String]) -> Result<()> {
                     ", discarding {files} uncommitted {}",
                     plural(files, "file", "files")
                 ),
-            }
+            },
+            prunable_note(candidate),
         );
     }
 
@@ -597,6 +598,24 @@ fn acknowledged_count(arg: &str) -> Option<Result<usize>> {
             .parse::<usize>()
             .map_err(|err| format!("{arg}: {err}").into()),
     )
+}
+
+/// The clause the plan line adds for a worktree git reports as prunable, so a
+/// user is not told that a directory is about to be removed when it is already
+/// gone and only git's admin entry survives. `0 B reclaimed` and `gone` are
+/// different claims.
+///
+/// git reports `prunable` with a reason ("gitdir file points to non-existent
+/// location") but is not obliged to, so the two states are rendered as two
+/// sentences rather than one with an empty parenthesis in it.
+pub fn prunable_note(candidate: &Candidate) -> String {
+    match &candidate.worktree.prunable {
+        None => String::new(),
+        Some(prunable) => match &prunable.reason {
+            Some(reason) => format!("; the checkout is already gone ({reason})"),
+            None => "; the checkout is already gone, and git gave no reason".to_string(),
+        },
+    }
 }
 
 fn route_label(route: RemovalRoute) -> &'static str {

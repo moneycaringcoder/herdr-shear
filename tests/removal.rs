@@ -17,12 +17,12 @@ use std::time::Duration;
 
 use shear::config::Config;
 use shear::model::{
-    Candidate, Class, Dirt, Head, LockInfo, Merged, OpenWorkspace, RemovalRoute, RepoKey, Size,
-    Upstream, Verdict, Worktree,
+    Candidate, Class, Dirt, Head, LockInfo, Merged, OpenWorkspace, PrunableInfo, RemovalRoute,
+    RepoKey, Size, Upstream, Verdict, Worktree,
 };
 use shear::remove::{
-    check, git_remove, parse_remove_args, read_log, remove_one, restore_command, route_for,
-    Permissions, Refusal,
+    check, git_remove, parse_remove_args, prunable_note, read_log, remove_one, restore_command,
+    route_for, Permissions, Refusal,
 };
 
 #[path = "fixtures.rs"]
@@ -583,6 +583,77 @@ fn a_prunable_worktree_is_removable_through_git_although_its_directory_is_gone()
         listed.contains("wt-bystander") && alive.exists(),
         "and only the selected one: the other prunable-adjacent worktree is untouched"
     );
+}
+
+#[test]
+fn a_prunable_candidate_goes_through_remove_one_and_is_logged() {
+    // The same removal as above, but driven through the guarded path with a
+    // candidate that carries git's `prunable` flag, so the whole route is
+    // exercised against the real attribute rather than only `git_remove`.
+    arrange();
+    let fixture = Fixture::new("prunable-remove-one");
+    let path = fixture.prunable_worktree("vanished");
+    let oid = fixture.git(&fixture.repo, &["rev-parse", "vanished-branch"]);
+
+    let mut candidate = candidate(&path, &fixture.repo, Some("vanished-branch"), Some(&oid));
+    candidate.worktree.prunable = Some(PrunableInfo {
+        reason: Some("gitdir file points to non-existent location".into()),
+    });
+    candidate.classes.insert(Class::Prunable);
+    candidate.size = Size::Gone;
+
+    let record = remove_one(&candidate, Permissions::default(), None, &config())
+        .expect("a prunable worktree needs no permissions: there is nothing left to lose");
+
+    assert!(!fixture
+        .git(&fixture.repo, &["worktree", "list", "--porcelain"])
+        .contains("wt-vanished"));
+    assert_eq!(
+        fixture.git(&fixture.repo, &["rev-parse", "vanished-branch"]),
+        oid,
+        "the branch survives a prunable removal too"
+    );
+    assert_eq!(
+        record.bytes_reclaimed,
+        Some(0),
+        "a directory that is already gone reclaims nothing, which is a measurement \
+         rather than a missing one"
+    );
+    assert!(record.classes.iter().any(|class| class == "prunable"));
+
+    let records = read_log().expect("read the undo log");
+    assert!(records
+        .iter()
+        .any(|logged| logged.path == path.to_string_lossy()));
+}
+
+#[test]
+fn the_prunable_note_reads_correctly_with_and_without_a_reason() {
+    // git reports `prunable` with a reason but is not obliged to, and the two
+    // states are two sentences: an absent reason must never render as an empty
+    // parenthesis, for exactly the reason an absent lock reason must not.
+    let mut candidate = paper_candidate();
+    assert_eq!(
+        prunable_note(&candidate),
+        "",
+        "a worktree that is not prunable says nothing about prunability"
+    );
+
+    candidate.worktree.prunable = Some(PrunableInfo {
+        reason: Some("gitdir file points to non-existent location".into()),
+    });
+    assert_eq!(
+        prunable_note(&candidate),
+        "; the checkout is already gone (gitdir file points to non-existent location)"
+    );
+
+    candidate.worktree.prunable = Some(PrunableInfo { reason: None });
+    let note = prunable_note(&candidate);
+    assert_eq!(
+        note,
+        "; the checkout is already gone, and git gave no reason"
+    );
+    assert!(!note.contains("()"), "no empty parentheses: {note}");
 }
 
 #[test]

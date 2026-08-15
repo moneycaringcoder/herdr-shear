@@ -42,16 +42,29 @@ struct Server {
 impl Server {
     fn new(tag: &str, replies: Vec<Reply>) -> Self {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let dir = scratch_root().join(format!(
-            "{tag}-{}-{}",
+        let dir = socket_root().join(format!(
+            "{}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create socket directory");
-        let socket = dir.join("herdr.sock");
+        // Named `s`, not after the test: a unix socket path is capped at
+        // `SUN_LEN` (108 bytes on Linux, 104 on macOS) and every byte spent on
+        // a descriptive name is a byte a longer temp directory cannot have.
+        // `tag` still names the directory nothing binds to, in the panic
+        // messages below.
+        let socket = dir.join("s");
+        assert!(
+            socket.as_os_str().len() < 100,
+            "the socket path for `{tag}` is {} bytes, and a unix socket path is capped at \
+             about 100. Point TMPDIR at something shorter — this is not a shear limit.\n  {}",
+            socket.as_os_str().len(),
+            socket.display()
+        );
 
-        let listener = UnixListener::bind(&socket).expect("bind the fake herdr socket");
+        let listener = UnixListener::bind(&socket)
+            .unwrap_or_else(|err| panic!("bind the fake herdr socket for `{tag}`: {err}"));
         let requests = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(Mutex::new(0usize));
 
@@ -134,11 +147,16 @@ impl Drop for Server {
     }
 }
 
-fn scratch_root() -> PathBuf {
-    std::env::var_os("SHEAR_TEST_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("shear-herdr-client")
+/// Where the fake sockets live.
+///
+/// Deliberately **not** `SHEAR_TEST_DIR`, unlike every other scratch path in the
+/// suite. A unix socket path has a hard length limit — `SUN_LEN`, 108 bytes on
+/// Linux and 104 on macOS — and a harness scratch directory is nested deep
+/// enough to blow it on its own, which fails every test in this file with
+/// `path must be shorter than SUN_LEN`. The temp directory plus a two-component
+/// name is the shortest thing that is still unique per process and per server.
+fn socket_root() -> PathBuf {
+    std::env::temp_dir().join("shr")
 }
 
 // ---------------------------------------------------------------------------

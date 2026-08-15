@@ -243,10 +243,7 @@ fn a_measured_size_is_bytes_a_missing_one_is_gone_and_neither_is_a_plausible_zer
 
     let mut inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
     assert!(
-        inventory
-            .candidates
-            .iter()
-            .all(|c| c.size == Size::Pending),
+        inventory.candidates.iter().all(|c| c.size == Size::Pending),
         "a scan must not measure eagerly"
     );
 

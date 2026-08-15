@@ -376,7 +376,11 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
                     t.duration_since(SystemTime::UNIX_EPOCH).ok().map(|d| d.as_secs())
                 }),
                 "locked": candidate.worktree.locked.as_ref().map(|l| json!({"reason": l.reason})),
-                "prunable_reason": candidate.worktree.prunable,
+                // Projected by hand, like `locked` above and everything else
+                // here. Deriving `Serialize` on the model type instead would
+                // make the wire shape a side effect of a struct definition,
+                // which is the thing this function exists to prevent.
+                "prunable": candidate.worktree.prunable.as_ref().map(|p| json!({"reason": p.reason})),
                 "open_workspace": candidate.open_workspace.as_ref().map(|w| json!({
                     "workspace_id": w.workspace_id,
                     "label": w.label,

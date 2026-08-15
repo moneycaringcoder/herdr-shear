@@ -22,8 +22,8 @@ use shear::classify::{self, Facts};
 use shear::config::Config;
 use shear::git;
 use shear::model::{
-    Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, RepoKey, Upstream,
-    Verdict, Worktree,
+    Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, PrunableInfo,
+    RepoKey, Upstream, Verdict, Worktree,
 };
 
 use fixtures::{pin_git_env, Fixture};
@@ -303,8 +303,10 @@ fn a_prunable_worktree_is_review_and_never_safe() {
 
     assert_row(prunable, Verdict::Review, &[Class::Prunable, Class::Merged]);
     assert_eq!(
-        prunable.worktree.prunable.as_deref(),
-        Some("gitdir file points to non-existent location")
+        prunable.worktree.prunable,
+        Some(PrunableInfo {
+            reason: Some("gitdir file points to non-existent location".into())
+        })
     );
     // Clean by construction — the directory is not there to be dirty — and still
     // not safe, because that reason is also what an unmounted filesystem looks

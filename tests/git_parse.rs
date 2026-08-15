@@ -2,29 +2,33 @@
 //!
 //! Every fixture in this file is either a file from `tests/capture/` — real
 //! output, captured before the parser was written — or bytes taken live from a
-//! real repository built by `tests/fixtures.rs`. Nothing here is a string
-//! invented to match what the parser expects, because a fake in the shape the
-//! parser wants passes a whole suite while the parser is wrong.
+//! real repository built by `tests/fixtures.rs`. A fake in the shape the parser
+//! wants passes a whole suite while the parser is wrong, so there is exactly
+//! one constructed record here: a bare `prunable` field, which git 2.53.0 does
+//! not produce because it always supplies a reason. That test says so itself.
 //!
 //! The records that matter are the degenerate ones: a lock with no reason, a
-//! HEAD of all zeroes that still carries a branch line, a rename record that
-//! owns two NUL-terminated fields, and an untracked path containing a literal
-//! newline.
+//! HEAD of all zeroes that still carries a branch line, a bare repository with
+//! neither, a newline inside a worktree path and inside a lock reason, a rename
+//! record that owns two NUL-terminated fields, and an untracked path containing
+//! a literal newline.
 
 #[path = "fixtures.rs"]
 mod fixtures;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use shear::git::{self, BranchRow};
-use shear::model::{Head, LockInfo, RepoKey};
+use shear::model::{Head, LockInfo, PrunableInfo, RepoKey};
 
 use fixtures::{pin_git_env, Fixture};
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 const WORKTREE_LIST: &[u8] = include_bytes!("capture/worktree-list.z");
+const WORKTREE_LIST_NEWLINE: &[u8] = include_bytes!("capture/worktree-list-newline.z");
+const WORKTREE_LIST_BARE: &[u8] = include_bytes!("capture/worktree-list-bare.z");
 const FOR_EACH_REF: &[u8] = include_bytes!("capture/for-each-ref.txt");
 const FOR_EACH_REF_MERGED: &[u8] = include_bytes!("capture/for-each-ref-merged.txt");
 const STATUS_V2: &[u8] = include_bytes!("capture/status-v2.z");
@@ -88,6 +92,25 @@ fn the_capture_still_contains_the_shapes_under_test() {
         lines > 1 && lines != records,
         "line splitting and NUL splitting now agree, so this capture proves nothing"
     );
+
+    // The newline capture has to keep its newlines, in both of the two places a
+    // newline can reach a record.
+    assert!(
+        WORKTREE_LIST_NEWLINE.windows(8).any(|w| w == b"wt-new\nl"),
+        "the newline capture no longer has a newline inside a worktree path"
+    );
+    assert!(
+        WORKTREE_LIST_NEWLINE.windows(7).any(|w| w == b"think\na"),
+        "the newline capture no longer has a newline inside a lock reason"
+    );
+    assert!(
+        WORKTREE_LIST_BARE.windows(6).any(|w| w == b"\0bare\0"),
+        "the bare capture no longer has a bare marker"
+    );
+    assert!(
+        !WORKTREE_LIST_BARE.windows(5).any(|w| w == b"HEAD "),
+        "a bare record must have no HEAD at all"
+    );
 }
 
 #[test]
@@ -148,12 +171,39 @@ fn a_prunable_worktree_keeps_gits_own_reason() {
     let list = parsed();
     let prunable = by_suffix(&list, "wt-prunable");
     assert_eq!(
-        prunable.prunable.as_deref(),
-        Some("gitdir file points to non-existent location")
+        prunable.prunable,
+        Some(PrunableInfo {
+            reason: Some("gitdir file points to non-existent location".into())
+        })
     );
     // The branch line is still there, and still means what it says.
     assert_eq!(prunable.head, Head::Branch("goner-branch".into()));
     assert!(!prunable.is_main);
+}
+
+/// `prunable` gets the same shape as `locked` for the same reason, and this is
+/// the half of it no capture can show: git 2.53.0 always supplies a reason, so a
+/// bare `prunable` field is constructed here rather than captured. It is
+/// deliberately the *only* synthetic record left in this file, and it exists
+/// because "flagged, no reason given" and "the reason is the empty string" are
+/// different facts that `Option<String>` alone cannot tell apart.
+#[test]
+fn a_bare_prunable_is_flagged_with_no_reason_not_an_empty_one() {
+    let bytes = b"worktree /tmp/wt-gone\0HEAD 1338d9a0776263fed7455760e9e973db9389a29e\0\
+branch refs/heads/gone-branch\0prunable\0\0" as &[u8];
+
+    let list = git::parse_worktree_list(bytes, &key(), Path::new("/captured/repo"))
+        .expect("a bare prunable field parses");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].prunable, Some(PrunableInfo { reason: None }));
+    assert_ne!(
+        list[0].prunable,
+        Some(PrunableInfo {
+            reason: Some(String::new())
+        })
+    );
+    // The flag itself is the load-bearing half, and it survives either way.
+    assert!(list[0].prunable.is_some());
 }
 
 #[test]
@@ -191,29 +241,46 @@ fn an_all_zero_head_is_unborn_even_though_git_still_prints_a_branch() {
     );
 }
 
-/// Records are framed by an empty NUL field, so nothing in a path, a lock reason
-/// or a prunable reason can end a record early. Built by appending a real record
-/// shape — taken byte for byte from the capture — with a newline in its path.
+/// Records are framed by an empty NUL field, so nothing in a path or a lock
+/// reason can end a record early. Real captured bytes: `worktree-list-newline.z`
+/// was taken from a repository whose worktree path holds a literal newline and
+/// whose second worktree is locked with a reason that holds another one. A
+/// parser that splits on lines reports five worktrees where there are four, two
+/// of them at paths that do not exist.
 #[test]
-fn a_worktree_path_containing_a_newline_survives() {
-    let mut bytes = WORKTREE_LIST.to_vec();
-    bytes.extend_from_slice(b"worktree /tmp/wt-new\nline\0");
-    bytes.extend_from_slice(b"HEAD 1338d9a0776263fed7455760e9e973db9389a29e\0");
-    bytes.extend_from_slice(b"branch refs/heads/new\nline-branch\0");
-    bytes.extend_from_slice(b"locked because the path is absurd\0\0");
+fn a_newline_in_a_path_and_in_a_lock_reason_both_survive() {
+    let list = git::parse_worktree_list(WORKTREE_LIST_NEWLINE, &key(), Path::new("/captured/repo"))
+        .expect("a newline in a record is not a parse error");
+    assert_eq!(list.len(), 4, "captured: {list:#?}");
 
-    let list = git::parse_worktree_list(&bytes, &key(), Path::new("/captured/repo"))
-        .expect("a newline in a path is not a parse error");
-    assert_eq!(list.len(), 12);
-    let odd = list.last().expect("the appended record");
-    assert_eq!(odd.path, PathBuf::from("/tmp/wt-new\nline"));
-    assert_eq!(odd.head, Head::Branch("new\nline-branch".into()));
+    let odd = by_suffix(&list, "wt-new\nline");
     assert_eq!(
-        odd.locked,
+        odd.path
+            .file_name()
+            .expect("a final component")
+            .to_string_lossy(),
+        "wt-new\nline",
+        "the newline is inside one path component, not a record boundary"
+    );
+    assert_eq!(odd.head, Head::Branch("newline-branch".into()));
+    assert!(!odd.is_main);
+
+    // git forbids control characters in ref names, so a newline can never reach
+    // a `branch` line. The lock reason is the other place it can.
+    let locked = by_suffix(&list, "wt-locked-nl");
+    assert_eq!(
+        locked.locked,
         Some(LockInfo {
-            reason: Some("because the path is absurd".into())
+            reason: Some("held while I think\nabout it".into())
         })
     );
+
+    // The record after the newline one is still framed correctly, which is what
+    // a line-splitting parser gets wrong downstream rather than at the newline.
+    let plain = by_suffix(&list, "wt-plain");
+    assert_eq!(plain.head, Head::Branch("plain-branch".into()));
+    assert!(list[0].is_main, "the main checkout is still first");
+    assert_eq!(list.iter().filter(|w| w.is_main).count(), 1);
 }
 
 #[test]
@@ -239,30 +306,28 @@ fn an_empty_list_is_an_empty_list() {
         .is_empty());
 }
 
-/// A bare repository's record has no `HEAD` and no `branch`, so it cannot be
-/// read as a branch record by accident. These are live bytes from a real bare
-/// repo, because the committed capture has no bare worktree in it.
+/// A bare repository's record has no `HEAD` and no `branch`, so a parser that
+/// assumes every record resolves to a commit reads it as a branch record with a
+/// missing tip. Real captured bytes: `worktree-list-bare.z`.
 #[test]
 fn a_bare_record_is_bare() {
-    pin_git_env();
-    let fixture = Fixture::new("bare-record");
-    let bytes = git::run(
-        &fixture.origin,
-        &["worktree", "list", "--porcelain", "-z"],
-        TIMEOUT,
-    )
-    .expect("list the bare repo's worktrees");
-    assert!(
-        bytes.windows(6).any(|w| w == b"\0bare\0"),
-        "git no longer prints a bare marker: {:?}",
-        String::from_utf8_lossy(&bytes)
-    );
-
-    let list = git::parse_worktree_list(&bytes, &key(), &fixture.origin).expect("parse");
+    let list =
+        git::parse_worktree_list(WORKTREE_LIST_BARE, &key(), Path::new("/captured/bare.git"))
+            .expect("the captured bare repository parses");
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].head, Head::Bare);
-    assert_eq!(list[0].head_oid, None);
+    assert_eq!(
+        list[0].head_oid, None,
+        "there is no HEAD line to read an oid from"
+    );
+    assert_eq!(list[0].locked, None);
+    assert_eq!(list[0].prunable, None);
     assert!(list[0].is_main);
+    assert!(
+        list[0].path.ends_with("bare.git"),
+        "{}",
+        list[0].path.display()
+    );
 }
 
 // ---------------------------------------------------------------------------
