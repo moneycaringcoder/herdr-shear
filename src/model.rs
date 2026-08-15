@@ -216,6 +216,54 @@ pub enum Size {
     Failed,
 }
 
+/// Whether a worktree's work has landed in the integration ref.
+///
+/// Three states, not two, and the third one is the whole reason this is an enum
+/// rather than a `bool`. "I asked and the answer is no" and "I could not ask"
+/// are different facts, and collapsing them is how a tool of this kind starts
+/// quietly recommending the wrong thing: a repository with no resolvable default
+/// branch would report every worktree as unmerged, which happens to be the
+/// conservative direction here, but the same collapse in the other direction is
+/// one refactor away.
+///
+/// [`Unknown`](Merged::Unknown) never satisfies a condition. It is rendered as
+/// `?`, never as "no".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Merged {
+    /// The branch tip, or the detached commit, is contained in the named ref.
+    Into(String),
+    /// The test ran against the named ref and the commit is not contained in it.
+    No(String),
+    /// The test could not run: no integration ref resolved in this repository,
+    /// or the worktree has no commit to test.
+    Unknown,
+}
+
+impl Merged {
+    pub fn is_merged(&self) -> bool {
+        matches!(self, Merged::Into(_))
+    }
+
+    /// The ref the question was asked against, if it could be asked at all.
+    pub fn against(&self) -> Option<&str> {
+        match self {
+            Merged::Into(reference) | Merged::No(reference) => Some(reference),
+            Merged::Unknown => None,
+        }
+    }
+
+    /// `Some(true)`, `Some(false)`, or `None` for unknown. The JSON projection
+    /// uses this so a consumer gets `null` rather than `false` for a question
+    /// that was never asked.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Merged::Into(_) => Some(true),
+            Merged::No(_) => Some(false),
+            Merged::Unknown => None,
+        }
+    }
+}
+
 /// One worktree, fully classified. This is what the review table renders and
 /// what `remove.rs` guards against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,11 +271,8 @@ pub struct Candidate {
     pub worktree: Worktree,
     pub dirt: Dirt,
     pub upstream: Upstream,
-    /// The ref this worktree's branch was tested against, and whether it is
-    /// contained in it. `None` when the test could not run (detached, unborn, or
-    /// the integration ref does not resolve) — which is *not* the same as "not
-    /// merged" and must never be rendered as if it were.
-    pub merged_into: Option<String>,
+    /// Merged-ness, as three states rather than two. See [`Merged`].
+    pub merged: Merged,
     /// Commit time of the branch tip, for staleness.
     pub last_commit: Option<SystemTime>,
     /// herdr workspace holding this checkout open, if any.

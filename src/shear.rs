@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::disk;
 use crate::git;
 use crate::herdr::{self, Herdr};
-use crate::model::{Inventory, OpenWorkspace, Repo, RepoKey};
+use crate::model::{Inventory, Merged, OpenWorkspace, Repo, RepoKey};
 use crate::Result;
 
 /// Scans every repository in scope and classifies every worktree in each.
@@ -174,37 +174,44 @@ pub fn scan(config: &Config) -> Result<Inventory> {
                 .branch()
                 .and_then(|name| branch_by_name.get(name).copied());
 
-            let merged_into = match (&integration, worktree.head.branch(), &worktree.head) {
-                (Some(reference), Some(branch), _) if merged.iter().any(|m| m == branch) => {
-                    Some(reference.clone())
-                }
-                (Some(reference), None, crate::model::Head::Detached) => {
-                    match worktree.head_oid.as_deref() {
-                        Some(oid) => {
-                            match git::is_ancestor(&repo.root, oid, reference, config.git_timeout) {
-                                Ok(true) => Some(reference.clone()),
-                                Ok(false) => None,
-                                Err(err) => {
-                                    inventory.notes.push(format!(
-                                        "{}: could not test whether the detached HEAD is merged \
-                                         ({err})",
-                                        worktree.path.display()
-                                    ));
-                                    None
-                                }
-                            }
-                        }
-                        None => None,
+            // Three states, deliberately. `Merged::No` means the test ran and
+            // said no; `Merged::Unknown` means it could not run. Collapsing them
+            // is how a tool like this starts recommending the wrong thing.
+            let merged_state = match (&integration, worktree.head.branch()) {
+                (None, _) => Merged::Unknown,
+                (Some(reference), Some(branch)) => {
+                    if merged.iter().any(|m| m == branch) {
+                        Merged::Into(reference.clone())
+                    } else {
+                        Merged::No(reference.clone())
                     }
                 }
-                _ => None,
+                // No branch: a detached HEAD can still be tested by commit; an
+                // unborn or bare one has no commit to test at all.
+                (Some(reference), None) => match (&worktree.head, worktree.head_oid.as_deref()) {
+                    (crate::model::Head::Detached, Some(oid)) => {
+                        match git::is_ancestor(&repo.root, oid, reference, config.git_timeout) {
+                            Ok(true) => Merged::Into(reference.clone()),
+                            Ok(false) => Merged::No(reference.clone()),
+                            Err(err) => {
+                                inventory.notes.push(format!(
+                                    "{}: could not test whether the detached HEAD is merged \
+                                     ({err})",
+                                    worktree.path.display()
+                                ));
+                                Merged::Unknown
+                            }
+                        }
+                    }
+                    _ => Merged::Unknown,
+                },
             };
 
             let facts = Facts {
                 upstream: branch_row.map(|b| b.upstream.clone()).unwrap_or_default(),
                 last_commit: branch_row.and_then(|b| b.tip),
                 open_workspace: open.get(&worktree.path).cloned(),
-                merged_into,
+                merged: merged_state,
                 dirt,
                 worktree,
             };
@@ -350,9 +357,10 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
                 },
                 "upstream": candidate.upstream.name,
                 "upstream_gone": candidate.upstream.gone,
-                // `null` means the question could not be asked, which is not the
-                // same as `false` and must not be conflated by a consumer.
-                "merged_into": candidate.merged_into,
+                // `null` means the question could not be asked, which is not
+                // the same as `false` and must not be conflated by a consumer.
+                "merged": candidate.merged.as_bool(),
+                "merged_against": candidate.merged.against(),
                 "last_commit_unix": candidate.last_commit.and_then(|t| {
                     t.duration_since(SystemTime::UNIX_EPOCH).ok().map(|d| d.as_secs())
                 }),
