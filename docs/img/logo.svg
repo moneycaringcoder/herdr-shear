@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="shear">
+  <title>shear</title>
+  <!--
+    One repository (the trunk) with three checkouts hanging off it. The top two
+    are solid: live work. The bottom one is dashed and pale — it is dead, and the
+    stroke across its stem is the cut.
+
+    The trunk is deliberately untouched by the cut. That is the whole claim of
+    the plugin: removing a worktree takes the checkout, never the history it
+    came from.
+
+    Mid-tone colours on purpose: one file that reads on light and dark.
+  -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- trunk -->
+    <path d="M22 14 V114" stroke="#8b949e" stroke-width="6"/>
+
+    <!-- live checkouts -->
+    <g stroke="#8b949e" stroke-width="4">
+      <path d="M22 34 H44 a10 10 0 0 1 10 10 V44"/>
+      <path d="M22 68 H44 a10 10 0 0 1 10 10 V78"/>
+    </g>
+    <g fill="#8b949e" fill-opacity="0.18" stroke="#8b949e" stroke-width="4">
+      <rect x="54" y="26" width="52" height="30" rx="7"/>
+      <rect x="54" y="60" width="52" height="30" rx="7"/>
+    </g>
+
+    <!-- the dead checkout: dashed, pale, and severed -->
+    <path d="M22 102 H44 a10 10 0 0 1 10 10 V112" stroke="#8b949e" stroke-width="4"
+          stroke-opacity="0.45" stroke-dasharray="5 5"/>
+    <rect x="54" y="94" width="52" height="30" rx="7" fill="none"
+          stroke="#8b949e" stroke-width="4" stroke-opacity="0.45" stroke-dasharray="5 5"/>
+
+    <!-- the cut, across the dead stem only -->
+    <g stroke="#ff8080" stroke-width="6">
+      <line x1="30" y1="94" x2="44" y2="110"/>
+      <line x1="44" y1="94" x2="30" y2="110"/>
+    </g>
+  </g>
+</svg>

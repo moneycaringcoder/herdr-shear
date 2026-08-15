@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest something shear should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. A few things the project has already decided against,
+        so you know before you write:
+
+        - **Deleting branches.** shear removes checkouts. The commits are the
+          safety net that makes a removal feel reversible.
+        - **Network calls.** Classification is entirely local git state, so it
+          works offline and needs no token.
+        - **An auto-prune mode with no confirmation.** The product is confidence
+          about what is safe to delete, not the deleting.
+
+        If your idea is one of those, say why the reasoning above is wrong —
+        that is a perfectly good issue to open.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is awkward today
+      description: The situation you are in, rather than the feature you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Including whether plain git, or `shear --json` piped into something, already covers it.

@@ -1,0 +1,86 @@
+name: Bug report
+description: Something behaves differently than it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Redact paths and branch
+        names freely — a report with `/home/you/repos/app` in it is just as
+        useful as one with your real paths.
+
+        **If shear removed something it should not have, please say so in the
+        first line.** That is the most serious class of bug this project has,
+        and `shear --undo-log` records the path, branch and commit of every
+        removal, along with the command that restores the checkout.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+      placeholder: |
+        A worktree with uncommitted changes was classified `safe`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: The state of the worktree
+      description: >
+        Whether it was merged, whether its upstream still existed, whether it
+        was clean, whether it was open in a herdr workspace, and anything
+        unusual about the repository — submodules, a sparse checkout, a merge
+        in progress, a detached HEAD, a worktree on another filesystem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: json
+    attributes:
+      label: Output of `shear --json`
+      description: >
+        This carries every fact the classification was made from, which is
+        usually enough to find the problem on its own.
+      render: json
+
+  - type: textarea
+    id: git
+    attributes:
+      label: What git says
+      description: >
+        `git worktree list --porcelain` for the repository, and
+        `git for-each-ref --format='%(refname:short) %(upstream) %(upstream:track)' refs/heads/`.
+        shear's whole job is to read these correctly, so a disagreement between
+        them and shear is the bug.
+      render: shell
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `shear --version`, `herdr --version`, and `git --version`.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >
+        Your plugin `config.json`, if you have one, and anything unusual in the
+        repository's own git config.
+      render: json

@@ -1,0 +1,102 @@
+# How one worktree gets its verdict. The point of the picture is that `safe`
+# needs every question answered positively, while any single blocker short-
+# circuits the whole thing. Rendered to docs/img/verdicts.svg.
+#
+# No unicode marks in labels — d2's bundled font has no glyph for them and they
+# render as tofu.
+
+direction: right
+
+classes: {
+  q: {
+    shape: diamond
+    style: {
+      stroke: "#8b949e"
+      font-color: "#57606a"
+      fill: transparent
+      stroke-width: 2
+    }
+  }
+  blocked: {
+    shape: rectangle
+    style: {
+      stroke: "#8b949e"
+      font-color: "#57606a"
+      fill: transparent
+      stroke-width: 3
+      stroke-dash: 4
+      bold: true
+    }
+  }
+  keep: {
+    shape: rectangle
+    style: {
+      stroke: "#4a9eda"
+      font-color: "#0a558c"
+      fill: transparent
+      stroke-width: 3
+      bold: true
+    }
+  }
+  review: {
+    shape: rectangle
+    style: {
+      stroke: "#d9a441"
+      font-color: "#9a6700"
+      fill: transparent
+      stroke-width: 3
+      bold: true
+    }
+  }
+  safe: {
+    shape: rectangle
+    style: {
+      stroke: "#3fb950"
+      font-color: "#1a7f37"
+      fill: transparent
+      stroke-width: 3
+      bold: true
+    }
+  }
+}
+
+wt: "one worktree" {
+  class: q
+}
+
+main: "is it the main checkout?" { class: q }
+lock: "locked, or open in herdr?" { class: q }
+dirt: "uncommitted changes?" { class: q }
+dead: "merged AND upstream gone?" { class: q }
+signal: "any death signal?\nmerged, gone, stale, prunable" { class: q }
+
+b1: "blocked\nno override exists" { class: blocked }
+b2: "blocked\nunlock it, or close the workspace" { class: blocked }
+r1: "review\nnever preselected" { class: review }
+r2: "review\npick it yourself" { class: review }
+s: "safe\nthe only class a bulk\naction may preselect" { class: safe }
+k: "keep\nnothing says this is dead" { class: keep }
+
+wt -> main
+main -> b1: "yes"
+main -> lock: "no"
+lock -> b2: "yes"
+lock -> dirt: "no"
+dirt -> r1: "yes"
+dirt -> dead: "no"
+dead -> s: "yes"
+dead -> signal: "no"
+signal -> r2: "yes"
+signal -> k: "no"
+
+note: |md
+  An unanswerable question is not a yes.
+  A repo with no integration ref cannot
+  answer "merged", so nothing in it is safe.
+| {
+  style: {
+    stroke: transparent
+    fill: transparent
+    font-color: "#57606a"
+  }
+}

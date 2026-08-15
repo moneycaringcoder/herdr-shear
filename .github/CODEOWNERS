@@ -1,0 +1,13 @@
+# Every change requests a review from the maintainer automatically.
+# This is about staying informed, not about gatekeeping: contributions are
+# welcome and reviewed personally.
+*       @moneycaringcoder
+
+# The two files that can lose somebody's work. Changes here get the closest
+# reading: one runs against repositories full of uncommitted agent work, and the
+# other is the only code in the project that deletes anything.
+/src/git.rs          @moneycaringcoder
+/src/remove.rs       @moneycaringcoder
+/src/classify.rs     @moneycaringcoder
+/tests/read_only.rs  @moneycaringcoder
+/tests/removal.rs    @moneycaringcoder
