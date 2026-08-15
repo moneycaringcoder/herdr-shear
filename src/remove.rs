@@ -118,12 +118,22 @@ impl std::fmt::Display for Refusal {
                      lift it on their behalf: run `git worktree unlock <path>` yourself first"
                 )
             }
-            Refusal::OpenInHerdr { workspace, label } => write!(
-                f,
-                "herdr holds this worktree open as workspace {workspace} ({label}). \
-                 Pass --close-workspace to let shear close it as part of the removal, \
-                 or close it yourself first"
-            ),
+            Refusal::OpenInHerdr { workspace, label } => {
+                // A workspace with no label of its own falls back to its id, and
+                // "workspace w1X (w1X)" is the sort of thing that makes a reader
+                // wonder what the second one means.
+                let named = if label.is_empty() || label == workspace {
+                    workspace.clone()
+                } else {
+                    format!("{workspace} ({label})")
+                };
+                write!(
+                    f,
+                    "herdr holds this worktree open as workspace {named}. \
+                     Pass --close-workspace to let shear close it as part of the removal, \
+                     or close it yourself first"
+                )
+            }
             Refusal::Dirty { files } => write!(
                 f,
                 "the worktree has {files} uncommitted {} at risk. Pass --force-dirty \

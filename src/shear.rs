@@ -238,6 +238,31 @@ fn discover(
     let mut repos: Vec<Repo> = Vec::new();
     let mut open: BTreeMap<PathBuf, OpenWorkspace> = BTreeMap::new();
 
+    // `--repo` narrows which repositories are scanned. It does not make the
+    // session's workspaces stop existing, so the snapshot is still read for
+    // them: `worktree.list` knows *that* a checkout is open but not what the
+    // workspace is called, and a refusal that says "workspace w1X (w1X)" because
+    // the label fell back to the id is a worse sentence than one that just says
+    // "workspace w1X".
+    let session = match client {
+        Some(client) => match client.session_repos() {
+            Ok(session) => session,
+            Err(err) => {
+                notes.push(format!(
+                    "could not read the herdr session ({err}); workspace names are unavailable, \
+                     and without --repo only explicitly named repositories will be scanned"
+                ));
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
+    for repo in &session {
+        for (path, workspace) in &repo.open {
+            open.insert(path.clone(), workspace.clone());
+        }
+    }
+
     if !config.only_repos.is_empty() {
         for path in &config.only_repos {
             push_repo_at(path, config, &mut repos, notes);
@@ -245,28 +270,15 @@ fn discover(
         return Ok((repos, open));
     }
 
-    if let Some(client) = client {
-        match client.session_repos() {
-            Ok(session) => {
-                for repo in session {
-                    for (path, workspace) in repo.open {
-                        open.insert(path, workspace);
-                    }
-                    push_repo(
-                        Repo {
-                            key: repo.key,
-                            root: repo.root,
-                            name: repo.name,
-                        },
-                        &mut repos,
-                    );
-                }
-            }
-            Err(err) => notes.push(format!(
-                "could not read the herdr session ({err}); only explicitly named repositories \
-                 will be scanned"
-            )),
-        }
+    for repo in session {
+        push_repo(
+            Repo {
+                key: repo.key,
+                root: repo.root,
+                name: repo.name,
+            },
+            &mut repos,
+        );
     }
 
     for path in &config.extra_repos {
