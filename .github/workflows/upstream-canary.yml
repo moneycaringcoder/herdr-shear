@@ -1,0 +1,88 @@
+name: Herdr upstream canary
+
+# Advisory only. This job watches Herdr's development branch so that an upstream
+# change to the socket surface shear depends on is found here rather than in a
+# bug report. It is scheduled and manual only: it never runs on a pull request,
+# it is not a required status check in the branch ruleset, and its job name does
+# not collide with the required `test (ubuntu-latest)` and `test (macos-latest)`
+# contexts. A red canary means "go and look at Herdr master", never "this pull
+# request is bad".
+
+on:
+  schedule:
+    - cron: "57 5 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: herdr-upstream-canary
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: herdr master API contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Prove the contract check can fail
+        # Runs before the fetch on purpose. If these tests do not pass, the
+        # check below is not trustworthy and a green result would mean nothing.
+        run: python3 tools/test_herdr_api_contract.py
+
+      - name: Resolve Herdr master
+        id: resolve
+        run: |
+          set -euo pipefail
+          record="$(timeout 30s git -c protocol.version=2 ls-remote --exit-code \
+            https://github.com/herdrdev/herdr.git refs/heads/master)"
+          sha="$(printf '%s' "$record" | cut -f1)"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ls-remote did not return one full lowercase master SHA" >&2
+            exit 1
+          fi
+          printf 'Herdr master: %s\n' "$sha"
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the generated API schema at that revision
+        env:
+          HERDR_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Herdr generates this artifact from its own types and fails its test
+          # suite when it drifts, so it is the running server's surface rather
+          # than hand-written documentation. Pinned to the resolved SHA so the
+          # schema and the reported revision cannot disagree.
+          curl --fail --silent --show-error --location \
+            --max-time 60 --max-filesize 4194304 \
+            --output "$RUNNER_TEMP/herdr-api.schema.json" \
+            "https://raw.githubusercontent.com/herdrdev/herdr/${HERDR_SHA}/docs/next/api/herdr-api.schema.json"
+
+      - name: Check the surface shear depends on
+        run: |
+          set -euo pipefail
+          python3 tools/herdr_api_contract.py "$RUNNER_TEMP/herdr-api.schema.json" \
+            | tee "$RUNNER_TEMP/contract.txt"
+
+      - name: Record the advisory result
+        if: always()
+        env:
+          HERDR_SHA: ${{ steps.resolve.outputs.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## Herdr upstream canary"
+            echo
+            echo "- Herdr master: \`${HERDR_SHA:-unresolved}\`"
+            printf -- '- Contract: `%s`\n' \
+              "$(cat "$RUNNER_TEMP/contract.txt" 2>/dev/null || echo 'not reached')"
+            echo "- Result: \`${JOB_STATUS}\`"
+            echo
+            echo "Advisory only. A failure here is a signal to read Herdr's"
+            echo "recent changes, not a reason to hold any pull request."
+          } >> "$GITHUB_STEP_SUMMARY"

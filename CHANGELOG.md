@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An advisory upstream canary. Once a day it resolves one exact herdr `master`
+  commit, fetches the API schema herdr generates from its own types at that
+  revision, and checks that the five methods shear calls, the parameters it
+  sends, and the fields it reads back are all still there — including the ones
+  a removal returns, which are how shear reports what it destroyed. It is
+  scheduled and manual only, it is not a required check, and a red canary is a
+  signal to read herdr's recent changes rather than a reason to hold a pull
+  request.
+
 ## [0.1.0] - 2026-08-16
 
 First release.
