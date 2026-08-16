@@ -1,0 +1,129 @@
+name: Release
+
+# Pushing a vX.Y.Z tag runs the gates and, only if all of them pass, publishes
+# the GitHub release with notes taken from that version's CHANGELOG.md section.
+#
+# Nothing else triggers this. A tag that fails any gate leaves no release
+# behind: publication is the last step, in a separate job that depends on every
+# other one, and it is the only job granted write access.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  identity:
+    name: release identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Prove the identity gate can refuse
+        # Before trusting the gate below, run its own boundary tests. A gate
+        # that passes everything is worse than no gate, because it turns an
+        # unchecked release into one that looks checked.
+        run: python3 tools/test_check_release.py
+
+      - name: Verify the tag against every version surface
+        # Refuses unless the tag, Cargo.toml, Cargo.lock and herdr-plugin.toml
+        # all agree, and the changelog has a dated, non-empty section for it.
+        run: python3 tools/check_release.py
+
+  gate:
+    name: release gate (${{ matrix.os }})
+    needs: identity
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install the toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --all-targets --locked
+
+      - name: Release build
+        run: cargo build --release --locked
+
+  publish:
+    name: publish the GitHub release
+    needs: [identity, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Re-verify identity and collect the release notes
+        # Deliberately run again rather than carrying the notes from the
+        # identity job as an artifact. It is a few seconds, it removes an
+        # artifact that could be substituted between jobs, and it means the
+        # notes are produced by the same checkout that is about to be
+        # published from.
+        run: python3 tools/check_release.py --notes-out "$RUNNER_TEMP/notes.md"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "refusing to publish from tag $TAG" >&2
+            exit 1
+          fi
+          # --verify-tag refuses if the tag does not exist on the remote, so a
+          # deleted or rewritten tag cannot produce a release pointing nowhere.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --verify-tag
+
+      - name: Record what was published
+        if: always()
+        env:
+          TAG: ${{ github.ref_name }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## Release ${TAG}"
+            echo
+            echo "- Result: \`${JOB_STATUS}\`"
+            echo
+            echo "### Notes published"
+            echo
+            cat "$RUNNER_TEMP/notes.md" 2>/dev/null || echo "_none: the identity gate refused._"
+          } >> "$GITHUB_STEP_SUMMARY"
