@@ -8,9 +8,8 @@ use crate::Result;
 
 pub const PLUGIN_ID: &str = "moneycaringcoder.shear";
 
-/// Days after which a clean, unmerged branch is called stale. Chosen in the
-/// A fortnight is long enough that an ordinary holiday does not condemn a
-/// branch.
+/// Days after which a clean, unmerged branch is called stale. A fortnight is
+/// long enough that an ordinary holiday does not condemn a branch.
 pub const DEFAULT_STALE_DAYS: u64 = 14;
 
 /// Candidate integration refs, tried in order when the user has not named one
