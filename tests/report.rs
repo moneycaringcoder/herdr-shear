@@ -277,7 +277,7 @@ fn protected_stale_worktree_is_reported_as_protected() {
 }
 
 #[test]
-fn merged_staleness_rule_puts_the_branch_in_stale() {
+fn merged_stale_row_reports_positive_merge_answer() {
     let _guard = env_lock();
     fixtures::pin_git_env();
     no_herdr();
@@ -307,10 +307,50 @@ fn merged_staleness_rule_puts_the_branch_in_stale() {
         ..Config::default()
     };
 
-    assert_eq!(
-        stale_row_at(&document(&config), &stale)["path"],
-        stale.to_string_lossy().as_ref()
-    );
+    let row = stale_row_at(&document(&config), &stale).clone();
+    assert_eq!(row["path"], stale.to_string_lossy().as_ref());
+    assert_eq!(row["merged"], true);
+    assert_eq!(row["merged_against"], "main");
+}
+
+#[test]
+fn unmerged_stale_row_reports_negative_merge_answer() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    no_herdr();
+
+    let fixture = Fixture::new("report-unmerged-answer");
+    let stale = fixture.stale_worktree("unmerged-old", 45);
+    let report = document(&Config {
+        measure_disk: false,
+        ..config_for(&fixture.repo)
+    });
+
+    let row = stale_row_at(&report, &stale);
+    assert_eq!(row["merged"], false);
+    assert_eq!(row["merged_against"], "main");
+}
+
+#[test]
+fn unanswerable_merge_question_is_null_and_never_false() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    no_herdr();
+
+    let fixture = Fixture::new("report-unknown-merge");
+    let repo = fixture.no_integration_repo("orphaned");
+    let report = document(&Config {
+        only_repos: vec![repo.clone()],
+        stale_days: 0,
+        measure_disk: false,
+        ..Config::default()
+    });
+
+    let row = stale_row_at(&report, &repo);
+    let merged = &row["merged"];
+    assert!(merged.is_null(), "an unasked merge question is JSON null");
+    assert_ne!(merged, false, "an unasked merge question is never false");
+    assert!(row["merged_against"].is_null());
 }
 
 #[test]

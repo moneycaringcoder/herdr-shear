@@ -28,6 +28,7 @@ pub mod remove;
 pub mod render;
 pub mod report;
 pub mod shear;
+pub mod timestamp;
 pub mod tui;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
