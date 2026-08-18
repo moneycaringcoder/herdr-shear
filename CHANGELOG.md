@@ -23,6 +23,19 @@ All notable changes to this project are documented here. The format follows
   scheduled and manual only, it is not a required check, and a red canary is a
   signal to read herdr's recent changes rather than a reason to hold a pull
   request.
+- `--restore <id>`, which puts a removed checkout back instead of printing a
+  command for someone to paste. The ids are the `#N` numbers `--undo-log` now
+  prints, and they are each record's line number in an append-only log, so an
+  id never comes to mean a different removal. The recorded restore command is
+  not executed: the argv is rebuilt from the record's own fields, and the branch
+  form of `git worktree add` is used only when that branch still points at the
+  commit the checkout was removed at. Otherwise the checkout comes back
+  detached at exactly that commit, because creating or moving a branch to make
+  a checkout reappear would put work at a commit nobody chose — worse than a
+  refusal. A checkout that was removed through herdr comes back without its
+  workspace, and the restore says so: herdr 0.8.0 has no call that opens a
+  workspace at a path, and implying the session is as it was would be a quiet
+  fallback.
 - A per-repository block under the inventory, for the case that actually makes
   anyone run a janitor: not one worktree, but forty across six checkouts. Each
   repository gets one line — worktrees, safe rows, what removing them reclaims,
