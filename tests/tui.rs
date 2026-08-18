@@ -64,6 +64,16 @@ impl Row {
         self
     }
 
+    fn upstream_gone(mut self, name: &str) -> Self {
+        self.0.upstream = Upstream {
+            name: Some(name.to_string()),
+            gone: true,
+            ahead: 0,
+            behind: 0,
+        };
+        self
+    }
+
     fn size(mut self, size: Size) -> Self {
         self.0.size = size;
         self
@@ -135,6 +145,7 @@ fn inventory() -> Inventory {
                 .verdict(Verdict::Safe)
                 .classes(&[Class::Merged, Class::GoneUpstream])
                 .merged(Merged::Into("origin/main".into()))
+                .upstream_gone("origin/feature-login")
                 .size(Size::Bytes(1_310_000_000))
                 .reason("merged into origin/main, upstream gone, clean")
                 .build(),
@@ -142,6 +153,7 @@ fn inventory() -> Inventory {
                 .verdict(Verdict::Safe)
                 .classes(&[Class::Merged, Class::GoneUpstream])
                 .merged(Merged::Into("origin/main".into()))
+                .upstream_gone("origin/chore-deps")
                 .size(Size::Bytes(419_430_400))
                 .reason("merged into origin/main, upstream gone, clean")
                 .build(),
@@ -685,9 +697,99 @@ fn an_unmeasured_row_is_counted_rather_than_ignored() {
 fn the_pane_shows_why_the_cursor_row_is_what_it_is() {
     let state = drive(review(), &[Key::Down]);
     let rendered = frame(&state, 80, 24);
+    assert!(rendered.contains("feature-login: safe"), "{rendered}");
     assert!(
-        rendered.contains("feature-login: merged into origin/main, upstream gone, clean"),
+        rendered.contains("upstream origin/feature-login is gone"),
         "{rendered}"
+    );
+    assert!(rendered.contains("merged into origin/main"), "{rendered}");
+}
+
+#[test]
+fn the_detail_block_follows_the_cursor() {
+    let first = frame(&review(), 80, 24);
+    let moved = frame(&drive(review(), &[Key::Down]), 80, 24);
+
+    assert!(first.contains("chore-deps: safe"), "{first}");
+    assert!(!first.contains("feature-login: safe"), "{first}");
+    assert!(moved.contains("feature-login: safe"), "{moved}");
+    assert!(!moved.contains("chore-deps: safe"), "{moved}");
+}
+
+#[test]
+fn the_detail_block_stays_bounded_in_narrow_and_short_frames() {
+    let state = review();
+    for (columns, rows) in [(40usize, 24usize), (80, 8), (40, 8)] {
+        let rendered = frame(&state, columns, rows);
+        assert_eq!(
+            rendered.lines().count(),
+            rows,
+            "{columns}x{rows}:\n{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .all(|line| shear::render::display_width(line) <= columns),
+            "{columns}x{rows}:\n{rendered}"
+        );
+    }
+
+    let bounded = frame(&state, 40, 10);
+    assert!(bounded.contains("chore-deps: safe"), "{bounded}");
+    assert!(bounded.contains("  +2 more (widen the pane)"), "{bounded}");
+    assert!(
+        !bounded.contains("upstream origin/chore-deps is gone"),
+        "a signal is omitted whole rather than truncated: {bounded}"
+    );
+}
+
+#[test]
+fn a_wrapped_signal_keeps_its_indent_at_the_minimum_width() {
+    let state = drive(review(), &[Key::Down, Key::Down, Key::Down]);
+    let rendered = frame(&state, 40, 24);
+
+    assert!(
+        rendered.contains(
+            "mislabelled-locked: safe\n  locked (benchmark rig); run `git\n  worktree unlock\n"
+        ),
+        "the signal and its continuation stay grouped beneath the naming line:\n{rendered}"
+    );
+    assert_eq!(rendered.lines().count(), 24, "{rendered}");
+    assert!(
+        rendered
+            .lines()
+            .all(|line| shear::render::display_width(line) <= 40),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_long_detail_yields_before_confirmation_and_safety_lines() {
+    let mut state = with_a_dirty_row();
+    state.cursor = DIRTY_REVIEW;
+    state = drive(state, &[Key::Remove, Key::Confirm]);
+    let rendered = frame(&state, 80, 12);
+    let flattened = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert!(
+        flattened.contains("12 files that exist nowhere else"),
+        "the destructive-work warning survives:\n{rendered}"
+    );
+    assert!(
+        flattened.contains("Type the number of files at risk, then Enter. Esc cancels."),
+        "the confirmation instructions survive:\n{rendered}"
+    );
+    assert!(rendered.contains("files at risk: 12"), "{rendered}");
+    assert!(
+        flattened.contains(
+            "Removing a worktree leaves its branch and every commit on it intact: only the \
+             checkout goes."
+        ),
+        "the safety note survives:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("hotfix-payments: review"),
+        "detail yields before protected blocks:\n{rendered}"
     );
 }
 
@@ -712,9 +814,9 @@ fn the_browsing_frame_is_pinned() {
 
 
 
-
-
-chore-deps: merged into origin/main, upstream gone, clean
+chore-deps: safe
+  upstream origin/chore-deps is gone
+  merged into origin/main
 2 selected \u{b7} 1.6 GB
 Selected the 2 safe worktrees, and nothing else.
 Removing a worktree leaves its branch and every commit on it intact: only the
@@ -746,9 +848,9 @@ fn the_dirty_confirmation_frame_is_pinned() {
     keep    open          3w      \u{2026} review/ui       \u{2026}/dev/repos/app-wt/review-ui
     blocked               3w 120 MB main            /home/dev/repos/app
 
-
-
-chore-deps: merged into origin/main, upstream gone, clean
+chore-deps: safe
+  upstream origin/chore-deps is gone
+  merged into origin/main
 2 selected \u{b7} 1.2 GB \u{b7} 12 uncommitted files in 1 of them
 1 of the 2 selected worktrees has uncommitted work: 12 files that exist nowhere
 else. Removing the checkout destroys them; no branch and no commit is touched.
