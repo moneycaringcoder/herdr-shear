@@ -77,6 +77,17 @@ All notable changes to this project are documented here. The format follows
   is indistinguishable from a scan that missed it, and this is the one setting a
   user is most likely to get wrong on the first try. An empty pattern is ignored
   with a warning, since it would silently protect everything.
+- A per-repository block under the inventory, for the case that actually makes
+  anyone run a janitor: not one worktree, but forty across six checkouts. Each
+  repository gets one line — worktrees, safe rows, what removing them reclaims,
+  and what the repository occupies — ordered by reclaimable bytes descending, so
+  the checkout costing the most disk is the first thing read. It appears only
+  when there is more than one repository, because a single-repository session
+  does not need the global figures said twice. A repository with rows that could
+  not be measured marks its total as a floor and says how many, so a floor is
+  attributable to a repository rather than being one global disclaimer; a
+  repository with nothing safe in it says so, instead of reporting `0 B`
+  reclaimable as though that were a measurement.
 
 ## [0.1.0] - 2026-08-16
 

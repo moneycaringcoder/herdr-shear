@@ -8,6 +8,7 @@
 //! its columns line up and its paths are readable at 80 columns, because that is
 //! the whole interface.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -360,6 +361,86 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
         push_wrapped(&mut out, "", "", &unmeasured, width);
     }
 
+    // Use the same candidate-derived repository count the sentence above just
+    // reported; registered repositories with no worktrees do not belong here.
+    if repos.len() >= 2 {
+        let mut by_repo: Vec<_> = grouped(inventory)
+            .into_iter()
+            .filter_map(|(key, group)| {
+                let first = group.first().copied()?;
+                let (name, root) = repo_identity(inventory, &key, first);
+                let safe_rows = group
+                    .iter()
+                    .filter(|candidate| candidate.verdict == Verdict::Safe)
+                    .count();
+                let (safe_bytes, safe_unknown) = reclaimable(
+                    group
+                        .iter()
+                        .copied()
+                        .filter(|candidate| candidate.verdict == Verdict::Safe),
+                );
+                let (total_bytes, total_unknown) = reclaimable(group.iter().copied());
+                Some((
+                    root,
+                    name,
+                    group.len(),
+                    safe_rows,
+                    safe_bytes,
+                    safe_unknown,
+                    total_bytes,
+                    total_unknown,
+                ))
+            })
+            .collect();
+        by_repo.sort_by(|a, b| b.4.cmp(&a.4).then_with(|| a.0.cmp(b.0)));
+
+        for (_, name, row_count, safe_rows, safe_bytes, safe_unknown, total_bytes, total_unknown) in
+            by_repo
+        {
+            let safe_figure = format!(
+                "{}{}",
+                human_bytes(safe_bytes),
+                if safe_unknown > 0 { "+" } else { "" }
+            );
+            let total_figure = format!(
+                "{}{}",
+                human_bytes(total_bytes),
+                if total_unknown > 0 { "+" } else { "" }
+            );
+            let unmeasured = if total_unknown > 0 {
+                format!(" ({total_unknown} unmeasured)")
+            } else {
+                String::new()
+            };
+            let details = if safe_rows == 0 {
+                format!(
+                    ": {}, {safe_rows} safe · nothing safe to remove · {total_figure} total{unmeasured}",
+                    plural(row_count, "worktree", "worktrees"),
+                )
+            } else {
+                format!(
+                    ": {}, {safe_rows} safe · {safe_figure} reclaimable of {total_figure}{unmeasured}",
+                    plural(row_count, "worktree", "worktrees"),
+                )
+            };
+            let available_name_width = width
+                .saturating_sub(display_width("  "))
+                .saturating_sub(display_width(&details));
+            let display_name = if available_name_width > 0 {
+                truncate_right(&name, available_name_width)
+            } else {
+                name.to_string()
+            };
+            push_wrapped(
+                &mut out,
+                "  ",
+                "    ",
+                &format!("{display_name}{details}"),
+                width,
+            );
+        }
+    }
+
     push_wrapped(&mut out, "", "", SAFETY_NOTE, width);
     out
 }
@@ -585,16 +666,23 @@ pub fn repo_heading(
     first: &Candidate,
     width: usize,
 ) -> String {
-    let repo = inventory.repo(key);
-    let root = repo
-        .map(|r| r.root.clone())
-        .unwrap_or_else(|| first.worktree.repo_root.clone());
-    let name = repo
-        .map(|r| r.name.clone())
-        .unwrap_or_else(|| name_of(&root));
+    let (name, root) = repo_identity(inventory, key, first);
     let prefix = format!("repo {name}  ");
     let budget = width.saturating_sub(display_width(&prefix)).max(8);
     format!("{prefix}{}", truncate_left(&root.to_string_lossy(), budget))
+}
+
+fn repo_identity<'a>(
+    inventory: &'a Inventory,
+    key: &RepoKey,
+    first: &'a Candidate,
+) -> (Cow<'a, str>, &'a Path) {
+    if let Some(repo) = inventory.repo(key) {
+        (Cow::Borrowed(&repo.name), &repo.root)
+    } else {
+        let root = first.worktree.repo_root.as_path();
+        (Cow::Owned(name_of(root)), root)
+    }
 }
 
 fn name_of(root: &Path) -> String {
