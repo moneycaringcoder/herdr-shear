@@ -249,6 +249,58 @@ fn empty_inventory() -> Inventory {
     Inventory::default()
 }
 
+fn six_repository_inventory() -> Inventory {
+    let specs = [
+        (
+            "/home/dev/repos/repository-three-with-an-intentionally-long-root-name",
+            "repository-three-with-an-intentionally-long-display-name",
+            3_u64,
+        ),
+        (
+            "/home/dev/repos/repository-one-with-an-intentionally-long-root-name",
+            "repository-one-with-an-intentionally-long-display-name",
+            1,
+        ),
+        (
+            "/home/dev/repos/repository-six-with-an-intentionally-long-root-name",
+            "repository-six-with-an-intentionally-long-display-name",
+            6,
+        ),
+        (
+            "/home/dev/repos/repository-two-with-an-intentionally-long-root-name",
+            "repository-two-with-an-intentionally-long-display-name",
+            2,
+        ),
+        (
+            "/home/dev/repos/repository-five-with-an-intentionally-long-root-name",
+            "repository-five-with-an-intentionally-long-display-name",
+            5,
+        ),
+        (
+            "/home/dev/repos/repository-four-with-an-intentionally-long-root-name",
+            "repository-four-with-an-intentionally-long-display-name",
+            4,
+        ),
+    ];
+    Inventory {
+        repos: specs
+            .iter()
+            .map(|(root, name, _)| repo(root, name))
+            .collect(),
+        candidates: specs
+            .iter()
+            .map(|(root, _, mib)| {
+                let path = format!("{root}/worktrees/cleanup");
+                Row::branch(root, &path, "cleanup")
+                    .verdict(Verdict::Safe)
+                    .size(Size::Bytes(mib * 1024 * 1024))
+                    .build()
+            })
+            .collect(),
+        notes: Vec::new(),
+    }
+}
+
 fn widths_of(text: &str) -> Vec<usize> {
     text.lines().map(display_width).collect()
 }
@@ -298,6 +350,8 @@ fn the_summary_at_eighty_columns_is_pinned() {
 Removing the 1 safe worktree would reclaim 1.2 GB of the 4.1 GB all 9 worktrees
 occupy.
 2 worktrees could not be measured, so that figure is a floor, not an estimate.
+  app: 7 worktrees, 1 safe · 1.2 GB reclaimable of 1.6 GB+ (2 unmeasured)
+  very-long-name-f\u{2026}: 2 worktrees, 0 safe · nothing safe to remove · 2.5 GB total
 Removing a worktree leaves its branch and every commit on it intact: only the
 checkout goes.
 ";
@@ -334,10 +388,15 @@ fn the_table_survives_forty_columns() {
 #[test]
 fn no_line_ever_exceeds_the_width_it_was_given() {
     let inventory = full_inventory();
+    let six_repositories = six_repository_inventory();
     for columns in [MIN_COLUMNS, 40, 80, 100, 200] {
         for (name, text) in [
             ("table", table(&inventory, columns)),
             ("summary", summary(&inventory, columns)),
+            (
+                "six-repository summary",
+                summary(&six_repositories, columns),
+            ),
             ("empty table", table(&empty_inventory(), columns)),
             ("empty summary", summary(&empty_inventory(), columns)),
         ] {
@@ -593,6 +652,320 @@ fn the_summary_counts_the_rows_it_could_not_measure() {
     assert!(
         rendered.contains("only the checkout goes"),
         "the safety sentence is under every table"
+    );
+}
+
+#[test]
+fn a_single_repository_does_not_repeat_the_global_summary() {
+    let inventory = Inventory {
+        repos: vec![repo(APP, "app")],
+        candidates: vec![
+            Row::branch(APP, "/home/dev/repos/app-wt/cleanup", "cleanup")
+                .verdict(Verdict::Safe)
+                .size(Size::Bytes(2 * 1024))
+                .build(),
+        ],
+        notes: Vec::new(),
+    };
+    let expected = "\
+1 worktree in 1 repository: 1 safe worktree, 0 review, 0 keep, 0 blocked.
+Removing the 1 safe worktree would reclaim 2.0 kB of the 2.0 kB all 1 worktree occupy.
+Removing a worktree leaves its branch and every commit on it intact: only the checkout goes.
+";
+    assert_eq!(summary(&inventory, 200), expected);
+}
+
+#[test]
+fn six_repositories_are_ordered_by_reclaimable_bytes() {
+    let rendered = summary(&six_repository_inventory(), 200);
+    let names: Vec<_> = rendered
+        .lines()
+        .filter(|line| line.starts_with("  repository-"))
+        .map(|line| {
+            line.trim_start()
+                .split_once(':')
+                .expect("repository summary has a name")
+                .0
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "repository-six-with-an-intentionally-long-display-name",
+            "repository-five-with-an-intentionally-long-display-name",
+            "repository-four-with-an-intentionally-long-display-name",
+            "repository-three-with-an-intentionally-long-display-name",
+            "repository-two-with-an-intentionally-long-display-name",
+            "repository-one-with-an-intentionally-long-display-name",
+        ]
+    );
+}
+
+#[test]
+fn six_repositories_are_one_line_each_at_eighty_columns() {
+    let inventory = six_repository_inventory();
+    let repository_keys: BTreeSet<_> = inventory
+        .candidates
+        .iter()
+        .map(|candidate| &candidate.worktree.repo)
+        .collect();
+    let rendered = summary(&inventory, 80);
+    let lines: Vec<_> = rendered.lines().collect();
+    let block_start = lines
+        .iter()
+        .position(|line| line.starts_with("  "))
+        .expect("the per-repository block is rendered");
+    let block_end = lines
+        .iter()
+        .position(|line| line.starts_with("Removing a worktree"))
+        .expect("the safety note follows the per-repository block");
+    assert_eq!(
+        block_end - block_start,
+        repository_keys.len(),
+        "each repository occupies exactly one line:\n{rendered}"
+    );
+}
+
+#[test]
+fn registered_repositories_without_candidates_have_no_summary_line() {
+    let first_root = "/home/dev/repos/first";
+    let second_root = "/home/dev/repos/second";
+    let candidate_free_root = "/home/dev/repos/candidate-free";
+    let inventory = Inventory {
+        repos: vec![
+            repo(first_root, "first"),
+            repo(second_root, "second"),
+            repo(candidate_free_root, "candidate-free"),
+        ],
+        candidates: vec![
+            Row::branch(
+                first_root,
+                "/home/dev/repos/first/worktrees/cleanup",
+                "cleanup",
+            )
+            .size(Size::Bytes(1024))
+            .build(),
+            Row::branch(
+                second_root,
+                "/home/dev/repos/second/worktrees/cleanup",
+                "cleanup",
+            )
+            .size(Size::Bytes(2048))
+            .build(),
+        ],
+        notes: Vec::new(),
+    };
+    let rendered = summary(&inventory, 200);
+    let repository_lines: Vec<_> = rendered
+        .lines()
+        .filter(|line| line.starts_with("  "))
+        .collect();
+    assert_eq!(
+        repository_lines.len(),
+        2,
+        "only repositories with candidates get summary lines:\n{rendered}"
+    );
+    assert!(
+        repository_lines
+            .iter()
+            .any(|line| line.starts_with("  first:")),
+        "the first repository is rendered: {rendered}"
+    );
+    assert!(
+        repository_lines
+            .iter()
+            .any(|line| line.starts_with("  second:")),
+        "the second repository is rendered: {rendered}"
+    );
+    assert!(
+        !rendered.contains("candidate-free"),
+        "a registered repository without candidates is absent: {rendered}"
+    );
+}
+
+#[test]
+fn unregistered_repositories_with_candidates_use_the_repo_root_name() {
+    let registered_root = "/home/dev/repos/registered-root";
+    let unregistered_root = "/home/dev/repos/unregistered-fallback";
+    let inventory = Inventory {
+        repos: vec![repo(registered_root, "registered-name")],
+        candidates: vec![
+            Row::branch(
+                registered_root,
+                "/home/dev/repos/registered-root/worktrees/cleanup",
+                "cleanup",
+            )
+            .size(Size::Bytes(1024))
+            .build(),
+            Row::branch(
+                unregistered_root,
+                "/home/dev/repos/unregistered-fallback/worktrees/cleanup",
+                "cleanup",
+            )
+            .size(Size::Bytes(2048))
+            .build(),
+        ],
+        notes: Vec::new(),
+    };
+    let rendered = summary(&inventory, 200);
+    let repository_lines: Vec<_> = rendered
+        .lines()
+        .filter(|line| line.starts_with("  "))
+        .collect();
+    assert_eq!(
+        repository_lines.len(),
+        2,
+        "both repositories with candidates get summary lines:\n{rendered}"
+    );
+    assert!(
+        repository_lines
+            .iter()
+            .any(|line| line.starts_with("  registered-name:")),
+        "the registered repository uses its configured name: {rendered}"
+    );
+    assert!(
+        repository_lines
+            .iter()
+            .any(|line| line.starts_with("  unregistered-fallback:")),
+        "the unregistered repository falls back to its repo root name: {rendered}"
+    );
+}
+
+#[test]
+fn repositories_with_equal_bytes_are_ordered_by_root() {
+    let inventory = Inventory {
+        repos: vec![
+            repo("/home/dev/repos/zeta-root", "zeta"),
+            repo("/home/dev/repos/alpha-root", "alpha"),
+        ],
+        candidates: vec![
+            Row::branch(
+                "/home/dev/repos/zeta-root",
+                "/home/dev/repos/zeta-root/worktrees/cleanup",
+                "cleanup",
+            )
+            .size(Size::Bytes(1024))
+            .build(),
+            Row::branch(
+                "/home/dev/repos/alpha-root",
+                "/home/dev/repos/alpha-root/worktrees/cleanup",
+                "cleanup",
+            )
+            .size(Size::Bytes(1024))
+            .build(),
+        ],
+        notes: Vec::new(),
+    };
+    let first = summary(&inventory, 200);
+    let second = summary(&inventory, 200);
+    assert_eq!(first, second);
+    assert!(
+        first
+            .find("  alpha:")
+            .expect("alpha repository is rendered")
+            < first.find("  zeta:").expect("zeta repository is rendered"),
+        "the root, not discovery order, breaks the tie: {first}"
+    );
+}
+
+#[test]
+fn a_fully_unmeasured_repository_never_claims_a_measured_zero() {
+    let unknown_root = "/home/dev/repos/unknown";
+    let known_root = "/home/dev/repos/known";
+    let inventory = Inventory {
+        repos: vec![repo(unknown_root, "unknown"), repo(known_root, "known")],
+        candidates: vec![
+            Row::branch(
+                unknown_root,
+                "/home/dev/repos/unknown/worktrees/pending",
+                "pending",
+            )
+            .size(Size::Pending)
+            .build(),
+            Row::branch(
+                unknown_root,
+                "/home/dev/repos/unknown/worktrees/failed",
+                "failed",
+            )
+            .size(Size::Failed)
+            .build(),
+            Row::branch(
+                known_root,
+                "/home/dev/repos/known/worktrees/measured",
+                "measured",
+            )
+            .size(Size::Bytes(2048))
+            .build(),
+        ],
+        notes: Vec::new(),
+    };
+    let rendered = summary(&inventory, 200);
+    let line = rendered
+        .lines()
+        .find(|line| line.starts_with("  unknown:"))
+        .expect("unknown repository is rendered");
+    assert!(
+        line.contains("nothing safe to remove · 0 B+ total (2 unmeasured)"),
+        "{line}"
+    );
+    assert!(!line.contains("0 B total"), "{line}");
+}
+
+#[test]
+fn safe_counts_and_bytes_are_per_repository() {
+    let safe_root = "/home/dev/repos/with-safe";
+    let none_root = "/home/dev/repos/without-safe";
+    let inventory = Inventory {
+        repos: vec![
+            repo(safe_root, "with-safe"),
+            repo(none_root, "without-safe"),
+        ],
+        candidates: vec![
+            Row::branch(
+                safe_root,
+                "/home/dev/repos/with-safe/worktrees/safe",
+                "safe",
+            )
+            .verdict(Verdict::Safe)
+            .size(Size::Bytes(1024 * 1024))
+            .build(),
+            Row::branch(
+                safe_root,
+                "/home/dev/repos/with-safe/worktrees/gone",
+                "gone",
+            )
+            .size(Size::Gone)
+            .build(),
+            Row::branch(
+                none_root,
+                "/home/dev/repos/without-safe/worktrees/keep",
+                "keep",
+            )
+            .size(Size::Bytes(2 * 1024 * 1024))
+            .build(),
+        ],
+        notes: Vec::new(),
+    };
+    let rendered = summary(&inventory, 200);
+    let with_safe = rendered
+        .lines()
+        .find(|line| line.starts_with("  with-safe:"))
+        .expect("safe repository is rendered");
+    assert!(
+        with_safe.contains("2 worktrees, 1 safe · 1.0 MB reclaimable of 1.0 MB"),
+        "{with_safe}"
+    );
+    let without_safe = rendered
+        .lines()
+        .find(|line| line.starts_with("  without-safe:"))
+        .expect("repository without safe rows is rendered");
+    assert!(
+        without_safe.contains("1 worktree, 0 safe · nothing safe to remove · 2.0 MB total"),
+        "{without_safe}"
+    );
+    assert!(
+        !rendered.contains("0 B reclaimable"),
+        "an unmeasured reclaimable figure is never invented: {rendered}"
     );
 }
 
