@@ -23,6 +23,17 @@ All notable changes to this project are documented here. The format follows
   scheduled and manual only, it is not a required check, and a red canary is a
   signal to read herdr's recent changes rather than a reason to hold a pull
   request.
+- The review pane now says *why* the row under the cursor got its verdict, one
+  line per signal, each quoting the value it was computed from: the counts of
+  what is uncommitted, git's own lock and prunable reasons verbatim, the
+  upstream ref that has gone, the integration ref a branch is contained in, and
+  how old the tip is. A row that is not `safe` ends with the first condition
+  that failed, because `safe` is the verdict that requires every question to
+  have been answered positively and the useful sentence is which one was not.
+  A worktree whose merge question could not be asked says exactly that, and
+  never that it is not merged. The block is bounded: it keeps whole signals and
+  says how many it could not show rather than truncating one mid-sentence,
+  since half an explanation reads as a different explanation.
 
 ## [0.1.0] - 2026-08-16
 

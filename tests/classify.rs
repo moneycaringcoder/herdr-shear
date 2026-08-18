@@ -527,6 +527,13 @@ fn a_worktree_open_in_a_herdr_workspace_is_blocked() {
         "the row names the unblocking action: {}",
         candidate.reason
     );
+    let signals = classify::signals(&candidate, SystemTime::now());
+    assert!(
+        signals.iter().any(|signal| {
+            signal == "open in the herdr workspace review pane; close it to unblock"
+        }),
+        "{signals:?}"
+    );
 }
 
 /// The three merged states, pinned side by side. `Unknown` is the one that
@@ -606,6 +613,234 @@ fn an_unknown_commit_time_is_not_staleness() {
     let candidate = classify::classify(facts, week(2), SystemTime::now());
     assert_row(&candidate, Verdict::Keep, &[]);
     assert!(!candidate.is(Class::Stale));
+}
+
+#[test]
+fn signals_quote_the_git_facts_that_produced_them() {
+    let sink = kitchen_sink("signals");
+    let now = SystemTime::now();
+
+    let dirty = classify::signals(at(&sink.inventory, &sink.dirty), now);
+    assert!(
+        dirty
+            .iter()
+            .any(|signal| signal == "1 unstaged, 1 untracked at risk"),
+        "{dirty:?}"
+    );
+
+    let locked = classify::signals(at(&sink.inventory, &sink.locked), now);
+    assert!(
+        locked.iter().any(|signal| {
+            signal.contains("held for demo") && signal.contains("git worktree unlock")
+        }),
+        "{locked:?}"
+    );
+    let locked_bare = classify::signals(at(&sink.inventory, &sink.locked_bare), now);
+    assert!(
+        locked_bare.iter().any(|signal| {
+            signal.contains("no reason given")
+                && signal.contains("git worktree unlock")
+                && !signal.contains("()")
+        }),
+        "{locked_bare:?}"
+    );
+
+    let prunable = classify::signals(at(&sink.inventory, &sink.prunable), now);
+    assert!(
+        prunable
+            .iter()
+            .any(|signal| signal.contains("gitdir file points to non-existent location")),
+        "{prunable:?}"
+    );
+
+    let safe = at(&sink.inventory, &sink.safe);
+    let upstream = safe.upstream.name.as_deref().expect("safe upstream");
+    let safe_signals = classify::signals(safe, now);
+    assert_eq!(
+        safe_signals,
+        vec![
+            format!("upstream {upstream} is gone"),
+            "merged into origin/main".to_string(),
+        ],
+        "signals follow Class significance order"
+    );
+
+    let stale = at(&sink.inventory, &sink.stale);
+    let age = now
+        .duration_since(stale.last_commit.expect("stale tip time"))
+        .expect("stale tip precedes now");
+    let stale_signals = classify::signals(stale, now);
+    assert!(
+        stale_signals.iter().any(|signal| {
+            signal == &format!("branch tip is {} old", shear::render::human_age(Some(age)))
+        }),
+        "{stale_signals:?}"
+    );
+
+    let main = classify::signals(at(&sink.inventory, &sink.fixture.repo), now);
+    assert!(
+        main.iter()
+            .any(|signal| signal == "main checkout; never a removal candidate"),
+        "{main:?}"
+    );
+}
+
+#[test]
+fn dirty_signals_quote_every_kind_of_dirt_in_significance_order() {
+    let now = SystemTime::UNIX_EPOCH + week(100);
+    let candidate = classify::classify(
+        Facts {
+            worktree: bare_worktree(),
+            dirt: Dirt {
+                staged: 2,
+                unstaged: 3,
+                untracked: 4,
+                unmerged: 5,
+            },
+            upstream: Upstream::default(),
+            merged: Merged::No("origin/main".into()),
+            last_commit: Some(now),
+            open_workspace: None,
+        },
+        week(2),
+        now,
+    );
+
+    let signals = classify::signals(&candidate, now);
+    assert_eq!(
+        signals.first().map(String::as_str),
+        Some("2 staged, 3 unstaged, 4 untracked, 5 unmerged at risk")
+    );
+    assert!(
+        signals
+            .last()
+            .is_some_and(|signal| signal.contains("not clean")),
+        "{signals:?}"
+    );
+}
+
+#[test]
+fn an_unknown_merge_signal_says_the_question_was_not_askable() {
+    let now = SystemTime::UNIX_EPOCH + week(100);
+    let candidate = classify::classify(
+        Facts {
+            worktree: bare_worktree(),
+            dirt: Dirt::default(),
+            upstream: Upstream {
+                name: Some("refs/remotes/origin/topic".into()),
+                gone: true,
+                ahead: 0,
+                behind: 0,
+            },
+            merged: Merged::Unknown,
+            last_commit: Some(now),
+            open_workspace: None,
+        },
+        week(2),
+        now,
+    );
+
+    let signals = classify::signals(&candidate, now);
+    assert!(
+        signals.iter().any(
+            |signal| signal.contains("merge question could not be asked")
+                && signal.contains("no integration ref resolved here")
+        ),
+        "{signals:?}"
+    );
+    let rendered = signals.join("\n");
+    assert!(!rendered.contains("not merged"), "{rendered}");
+    assert!(!rendered.contains("merged into"), "{rendered}");
+    assert!(
+        signals
+            .get(signals.len().saturating_sub(2))
+            .is_some_and(|signal| signal.starts_with("merge question could not be asked")),
+        "the unknown note comes after class signals and before the safe failure: {signals:?}"
+    );
+}
+
+#[test]
+fn no_commit_time_never_produces_a_stale_or_age_signal() {
+    let now = SystemTime::UNIX_EPOCH + week(100);
+    let candidate = classify::classify(
+        Facts {
+            worktree: bare_worktree(),
+            dirt: Dirt::default(),
+            upstream: Upstream::default(),
+            merged: Merged::Unknown,
+            last_commit: None,
+            open_workspace: None,
+        },
+        week(2),
+        now,
+    );
+
+    let signals = classify::signals(&candidate, now);
+    assert!(
+        signals
+            .iter()
+            .all(|signal| !signal.contains("old") && !signal.contains("stale")),
+        "{signals:?}"
+    );
+}
+
+#[test]
+fn only_non_safe_verdicts_end_with_the_first_failed_safe_condition() {
+    let now = SystemTime::UNIX_EPOCH + week(100);
+    let safe_facts = Facts {
+        worktree: bare_worktree(),
+        dirt: Dirt::default(),
+        upstream: Upstream {
+            name: Some("refs/remotes/origin/topic".into()),
+            gone: true,
+            ahead: 0,
+            behind: 0,
+        },
+        merged: Merged::Into("origin/main".into()),
+        last_commit: Some(now),
+        open_workspace: None,
+    };
+    let safe = classify::classify(safe_facts.clone(), week(2), now);
+    let review = classify::classify(
+        Facts {
+            merged: Merged::No("origin/main".into()),
+            ..safe_facts.clone()
+        },
+        week(2),
+        now,
+    );
+    let keep = classify::classify(
+        Facts {
+            upstream: Upstream {
+                name: Some("refs/remotes/origin/topic".into()),
+                gone: false,
+                ahead: 0,
+                behind: 0,
+            },
+            merged: Merged::No("origin/main".into()),
+            ..safe_facts
+        },
+        week(2),
+        now,
+    );
+
+    let safe_signals = classify::signals(&safe, now);
+    assert!(
+        safe_signals
+            .iter()
+            .all(|signal| !signal.starts_with("not safe:")),
+        "{safe_signals:?}"
+    );
+    for candidate in [&review, &keep] {
+        let signals = classify::signals(candidate, now);
+        assert!(
+            signals.last().is_some_and(|signal| {
+                signal.starts_with("not safe:") && signal.contains("merged into origin/main")
+            }),
+            "{:?}: {signals:?}",
+            candidate.verdict
+        );
+    }
 }
 
 fn week(n: u64) -> Duration {

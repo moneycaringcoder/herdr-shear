@@ -71,6 +71,124 @@ pub fn classify(facts: Facts, stale_after: std::time::Duration, now: SystemTime)
         reason,
     }
 }
+/// The observations behind a candidate's verdict, in significance order.
+///
+/// Unlike [`reason_for`], this is a list rather than a one-line summary. Each
+/// entry quotes the fact that produced it, and an unanswerable merge question
+/// stays an unknown rather than becoming a negative answer.
+pub fn signals(candidate: &Candidate, now: SystemTime) -> Vec<String> {
+    let mut signals = Vec::new();
+
+    // The main checkout is not a `Class`, because it is a structural property
+    // rather than evidence of abandonment. It is still the strongest blocker.
+    if candidate.worktree.is_main {
+        signals.push(main_checkout_phrase().to_string());
+    }
+
+    // Iterating the set is the single source of the significance order:
+    // `Class` derives `Ord` in declaration order.
+    for class in &candidate.classes {
+        match class {
+            Class::Dirty if candidate.dirt.is_dirty() => {
+                signals.push(dirt_phrase(&candidate.dirt));
+            }
+            Class::Locked => {
+                if let Some(phrase) = locked_phrase(&candidate.worktree) {
+                    signals.push(phrase);
+                }
+            }
+            Class::OpenInHerdr => {
+                if let Some(workspace) = &candidate.open_workspace {
+                    signals.push(open_workspace_phrase(workspace));
+                }
+            }
+            Class::Prunable => {
+                if let Some(phrase) = prunable_phrase(&candidate.worktree) {
+                    signals.push(phrase);
+                }
+            }
+            Class::GoneUpstream if candidate.upstream.gone => {
+                signals.push(upstream_phrase(&candidate.upstream));
+            }
+            Class::Merged => {
+                if matches!(candidate.merged, Merged::Into(_)) {
+                    signals.push(merged_phrase(&candidate.merged, &candidate.worktree.head));
+                }
+            }
+            Class::Stale => {
+                if let Some(age) = candidate
+                    .last_commit
+                    .and_then(|tip| now.duration_since(tip).ok())
+                {
+                    signals.push(format!(
+                        "branch tip is {} old",
+                        crate::render::human_age(Some(age))
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Unknown is not a `Merged` class. Keep its explanation after every actual
+    // signal so it cannot be mistaken for evidence that the work is finished.
+    if candidate.merged == Merged::Unknown {
+        signals.push(format!(
+            "merge question could not be asked: {}",
+            merge_unknown_reason(&candidate.worktree.head)
+        ));
+    }
+
+    if candidate.verdict != Verdict::Safe {
+        signals.push(first_failed_safe_condition(candidate));
+    }
+    signals
+}
+
+/// The verdict rules check blockers before the positive `Safe` observations.
+/// Say the first failure in that same order so this explanation cannot disagree
+/// with [`verdict_of`].
+fn first_failed_safe_condition(candidate: &Candidate) -> String {
+    if candidate.worktree.is_main {
+        return "not safe: this is the main checkout".to_string();
+    }
+    if candidate.worktree.locked.is_some() {
+        return "not safe: the checkout is locked".to_string();
+    }
+    if candidate.open_workspace.is_some() {
+        return "not safe: the checkout is open in herdr".to_string();
+    }
+    if candidate.dirt.is_dirty() {
+        return "not safe: the checkout is not clean".to_string();
+    }
+    match &candidate.merged {
+        Merged::Into(_) => {}
+        Merged::No(reference) => {
+            return format!("not safe: the tip is not merged into {reference}");
+        }
+        Merged::Unknown => {
+            return "not safe: merge into an integration ref was not positively observed"
+                .to_string();
+        }
+    }
+    if !candidate.upstream.gone {
+        return match &candidate.upstream.name {
+            Some(name) => format!("not safe: upstream {name} still exists"),
+            None => "not safe: no gone upstream was positively observed".to_string(),
+        };
+    }
+    if candidate.worktree.prunable.is_some() {
+        return "not safe: the checkout is prunable".to_string();
+    }
+    if candidate.worktree.head.branch().is_none() {
+        return "not safe: the checkout is not on a branch".to_string();
+    }
+
+    // A hand-built `Candidate` can carry a verdict that disagrees with its
+    // facts. Production candidates come through `classify`, but the explanation
+    // still must not omit the promised final entry for such a value.
+    "not safe: the verdict did not positively establish every safe condition".to_string()
+}
 
 /// The set of classes a worktree carries. Split out from [`classify`] so the
 /// tests can assert the reasons and the verdict independently.
@@ -176,25 +294,13 @@ pub fn reason_for(
     verdict: Verdict,
 ) -> String {
     if facts.worktree.is_main {
-        return "main checkout; never a removal candidate".to_string();
+        return main_checkout_phrase().to_string();
     }
-    if let Some(lock) = &facts.worktree.locked {
-        let reason = match &lock.reason {
-            Some(reason) if !reason.trim().is_empty() => format!(" ({reason})"),
-            // git prints a bare `locked` for `git worktree lock` with no
-            // `--reason`, which is a different fact from an empty reason.
-            _ => " (no reason given)".to_string(),
-        };
-        return format!(
-            "locked{reason}; run `git worktree unlock {}` to unblock",
-            facts.worktree.path.display()
-        );
+    if let Some(phrase) = locked_phrase(&facts.worktree) {
+        return phrase;
     }
     if let Some(workspace) = &facts.open_workspace {
-        return format!(
-            "open in the herdr workspace {}; close it to unblock",
-            workspace.label
-        );
+        return open_workspace_phrase(workspace);
     }
 
     let mut parts: Vec<String> = Vec::new();
@@ -203,17 +309,10 @@ pub fn reason_for(
     } else if verdict == Verdict::Safe {
         parts.push("clean".to_string());
     }
-    if let Some(prunable) = &facts.worktree.prunable {
-        parts.push(match &prunable.reason {
-            // Shown verbatim: "gitdir file points to non-existent location" is
-            // also what a temporarily unmounted filesystem looks like, and only
-            // the user can tell the two apart.
-            Some(reason) if !reason.trim().is_empty() => format!("prunable ({reason})"),
-            _ => "prunable: git's admin entry survives a checkout that is no longer there"
-                .to_string(),
-        });
+    if let Some(phrase) = prunable_phrase(&facts.worktree) {
+        parts.push(phrase);
     }
-    parts.push(merged_phrase(facts));
+    parts.push(merged_phrase(&facts.merged, &facts.worktree.head));
     parts.push(upstream_phrase(&facts.upstream));
     if classes.contains(&Class::Stale) {
         parts.push("no commit within the staleness window".to_string());
@@ -225,21 +324,59 @@ pub fn reason_for(
     parts.join(", ")
 }
 
+fn main_checkout_phrase() -> &'static str {
+    "main checkout; never a removal candidate"
+}
+
+fn locked_phrase(worktree: &Worktree) -> Option<String> {
+    let lock = worktree.locked.as_ref()?;
+    let reason = match &lock.reason {
+        Some(reason) if !reason.trim().is_empty() => format!(" ({reason})"),
+        // git prints a bare `locked` for `git worktree lock` with no
+        // `--reason`, which is a different fact from an empty reason.
+        _ => " (no reason given)".to_string(),
+    };
+    Some(format!(
+        "locked{reason}; run `git worktree unlock {}` to unblock",
+        worktree.path.display()
+    ))
+}
+
+fn open_workspace_phrase(workspace: &OpenWorkspace) -> String {
+    format!(
+        "open in the herdr workspace {}; close it to unblock",
+        workspace.label
+    )
+}
+
+fn prunable_phrase(worktree: &Worktree) -> Option<String> {
+    let prunable = worktree.prunable.as_ref()?;
+    Some(match &prunable.reason {
+        // Shown verbatim: "gitdir file points to non-existent location" is
+        // also what a temporarily unmounted filesystem looks like, and only
+        // the user can tell the two apart.
+        Some(reason) if !reason.trim().is_empty() => format!("prunable ({reason})"),
+        _ => "prunable: git's admin entry survives a checkout that is no longer there".to_string(),
+    })
+}
+
 /// The three merged states, each said in words that cannot be mistaken for
 /// another one. "cannot tell" is never abbreviated to "not merged".
-fn merged_phrase(facts: &Facts) -> String {
-    match &facts.merged {
+fn merged_phrase(merged: &Merged, head: &Head) -> String {
+    match merged {
         Merged::Into(reference) => format!("merged into {reference}"),
         Merged::No(reference) => format!("not merged into {reference}"),
-        // Two ways to be unanswerable, and the row has to say which, because the
-        // user's next action differs: set a default branch, or look at a
-        // worktree that has never had a commit.
-        Merged::Unknown => match facts.worktree.head {
-            Head::Unborn | Head::Bare => {
-                "cannot tell whether it is merged: there is no commit here to test".to_string()
-            }
-            _ => "cannot tell whether it is merged: no integration ref resolved here".to_string(),
-        },
+        Merged::Unknown => format!(
+            "cannot tell whether it is merged: {}",
+            merge_unknown_reason(head)
+        ),
+    }
+}
+
+fn merge_unknown_reason(head: &Head) -> &'static str {
+    match head {
+        Head::Unborn | Head::Bare => "there is no commit here to test",
+        _ => "no integration ref resolved here",
     }
 }
 
