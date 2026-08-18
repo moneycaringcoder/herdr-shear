@@ -11,7 +11,7 @@
 
 id = "moneycaringcoder.shear"
 name = "Shear"
-version = "0.1.0"
+version = "0.1.1"
 # Oldest herdr carrying every API this plugin calls: `worktree.list` with its
 # `open_workspace_id` field, `worktree.remove`, and `workspace.close`.
 # Developed and verified against 0.8.0 / protocol 19.
