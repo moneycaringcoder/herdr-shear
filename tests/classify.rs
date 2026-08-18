@@ -494,6 +494,7 @@ fn facts_for(inventory: &Inventory, path: &Path) -> Facts {
         merged: candidate.merged,
         last_commit: candidate.last_commit,
         open_workspace: candidate.open_workspace,
+        protected: None,
     }
 }
 
@@ -553,6 +554,7 @@ fn merged_unknown_never_satisfies_safe() {
         merged: Merged::Into("origin/main".into()),
         last_commit: Some(SystemTime::now()),
         open_workspace: None,
+        protected: None,
     };
     let now = SystemTime::now();
 
@@ -609,6 +611,7 @@ fn an_unknown_commit_time_is_not_staleness() {
         merged: Merged::Unknown,
         last_commit: None,
         open_workspace: None,
+        protected: None,
     };
     let candidate = classify::classify(facts, week(2), SystemTime::now());
     assert_row(&candidate, Verdict::Keep, &[]);

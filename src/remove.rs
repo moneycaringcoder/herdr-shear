@@ -6,21 +6,23 @@
 //! The rules, each of which needs a test that proves it *refuses*:
 //!
 //! 1. The main checkout is never removable. No override exists.
-//! 2. A locked worktree is never removable. The user must `git worktree unlock`
+//! 2. A protected worktree is never removable. The user must edit or remove the
+//!    matching pattern from `config.json`; no permission overrides protection.
+//! 3. A locked worktree is never removable. The user must `git worktree unlock`
 //!    it themselves — shear will not unlock on their behalf, because the lock is
 //!    somebody's explicit "do not touch this".
-//! 3. A worktree open in a herdr workspace is removable only with
+//! 4. A worktree open in a herdr workspace is removable only with
 //!    [`Permissions::close_workspace`], and then only through
 //!    [`RemovalRoute::Herdr`], which closes the workspace as part of the
 //!    removal.
-//! 4. A dirty worktree is removable only with [`Permissions::force_dirty`],
+//! 5. A dirty worktree is removable only with [`Permissions::force_dirty`],
 //!    which itself requires the caller to have named the exact at-risk file
 //!    count. A confirmation that can be given without reading the number is not
 //!    a confirmation.
-//! 5. **Never `rm -rf`.** Removal is `worktree.remove` over the socket for a
+//! 6. **Never `rm -rf`.** Removal is `worktree.remove` over the socket for a
 //!    worktree herdr holds open, and `git worktree remove` otherwise. Both leave
 //!    the branch and every commit on it in place.
-//! 6. Every removal is appended to the undo log *before* it is attempted, so a
+//! 7. Every removal is appended to the undo log *before* it is attempted, so a
 //!    removal that half-succeeds is still recoverable.
 //!
 //! The git invocations that write live here rather than in `git.rs`. That
@@ -67,6 +69,9 @@ pub struct Permissions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     MainCheckout,
+    Protected {
+        pattern: String,
+    },
     Locked {
         reason: Option<String>,
     },
@@ -103,6 +108,11 @@ impl std::fmt::Display for Refusal {
                 f,
                 "this is the repository's main checkout, which shear never removes. \
                  There is no override: removing it would take the repository with it"
+            ),
+            Refusal::Protected { pattern } => write!(
+                f,
+                "the worktree is protected by pattern `{pattern}` in config.json. Edit or \
+                 remove that pattern from config.json first; no flag overrides protection"
             ),
             Refusal::Locked { reason } => {
                 match reason {
@@ -166,12 +176,17 @@ impl std::error::Error for Refusal {}
 /// Pure, and separated from [`remove_one`] precisely so the guard tests never
 /// need a repository to prove a refusal.
 ///
-/// The order is the order of severity, and it matters: a worktree that is both
-/// locked and dirty is refused for the lock, because the lock is the refusal the
-/// user cannot talk shear out of.
+/// The order is the order of severity, and it matters: protection is checked
+/// before every overridable refusal because it is the refusal the user cannot
+/// talk shear out of.
 pub fn check(candidate: &Candidate, permissions: Permissions) -> std::result::Result<(), Refusal> {
     if candidate.worktree.is_main {
         return Err(Refusal::MainCheckout);
+    }
+    if let Some(pattern) = &candidate.protected {
+        return Err(Refusal::Protected {
+            pattern: pattern.clone(),
+        });
     }
     if let Some(lock) = &candidate.worktree.locked {
         return Err(Refusal::Locked {

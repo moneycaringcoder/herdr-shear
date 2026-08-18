@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
 use crate::classify::{self, Facts};
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::disk;
 use crate::git;
 use crate::herdr::{self, Herdr};
@@ -206,10 +206,22 @@ pub fn scan(config: &Config) -> Result<Inventory> {
                 },
             };
 
+            let path = worktree.path.to_string_lossy();
+            let branch = worktree.head.branch();
+            let protected = config
+                .protect
+                .iter()
+                .find(|pattern| {
+                    config::pattern_matches(pattern, &path)
+                        || branch.is_some_and(|name| config::branch_pattern_matches(pattern, name))
+                })
+                .cloned();
+
             let facts = Facts {
                 upstream: branch_row.map(|b| b.upstream.clone()).unwrap_or_default(),
                 last_commit: branch_row.and_then(|b| b.tip),
                 open_workspace: open.get(&worktree.path).cloned(),
+                protected,
                 merged: merged_state,
                 dirt,
                 worktree,
@@ -222,6 +234,23 @@ pub fn scan(config: &Config) -> Result<Inventory> {
                 .candidates
                 .push(classify::classify(facts, stale_after, now));
         }
+    }
+    let protected = inventory
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.protected.is_some())
+        .count();
+    if protected == 1 {
+        inventory.notes.push(
+            "1 protected worktree remains visible and blocked by a pattern in config.json; \
+             edit or remove that pattern to unblock it"
+                .into(),
+        );
+    } else if protected > 1 {
+        inventory.notes.push(format!(
+            "{protected} protected worktrees remain visible and blocked by patterns in \
+             config.json; edit or remove those patterns to unblock them"
+        ));
     }
 
     inventory.repos = repos;

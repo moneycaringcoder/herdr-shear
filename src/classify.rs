@@ -28,6 +28,8 @@ pub struct Facts {
     pub merged: Merged,
     pub last_commit: Option<SystemTime>,
     pub open_workspace: Option<OpenWorkspace>,
+    /// Protection pattern that matched the checkout path or branch name.
+    pub protected: Option<String>,
 }
 
 /// Classifies one worktree.
@@ -36,14 +38,16 @@ pub struct Facts {
 ///
 /// - The **main checkout** is never a candidate, whatever else is true of it:
 ///   `Verdict::Blocked`, reason "main checkout".
+/// - A configured **protection pattern** is `Blocked` and cannot be overridden.
+///   The reason names the pattern and the config file to edit.
 /// - **Locked** or **open in herdr** is `Blocked`. The reason names the
 ///   unblocking action (`git worktree unlock`, or closing the workspace).
 /// - **Dirty** is at most `Review`, never `Safe`, and never preselected. The
 ///   reason names the file count at risk.
 /// - **Safe** requires all of: clean, merged into the integration ref, upstream
-///   gone, not open in herdr, not locked, not the main checkout. Every one of
-///   those must be a positive observation; an unanswerable question fails the
-///   test.
+///   gone, not protected, not open in herdr, not locked, not the main checkout.
+///   Every one of those must be a positive observation; an unanswerable question
+///   fails the test.
 /// - **Prunable** is `Review`, not `Safe`, even though it is clean by
 ///   construction. git's own reason for a prunable worktree is usually "gitdir
 ///   file points to non-existent location", which is also what a temporarily
@@ -62,6 +66,7 @@ pub fn classify(facts: Facts, stale_after: std::time::Duration, now: SystemTime)
         merged: facts.merged,
         last_commit: facts.last_commit,
         open_workspace: facts.open_workspace,
+        protected: facts.protected,
         worktree: facts.worktree,
         classes,
         verdict,
@@ -199,6 +204,9 @@ pub fn classes_of(
 ) -> std::collections::BTreeSet<Class> {
     let mut classes = BTreeSet::new();
 
+    if facts.protected.is_some() {
+        classes.insert(Class::Protected);
+    }
     if facts.dirt.is_dirty() {
         classes.insert(Class::Dirty);
     }
@@ -247,12 +255,17 @@ pub fn verdict_of(facts: &Facts, classes: &std::collections::BTreeSet<Class>) ->
     if facts.worktree.is_main {
         return Verdict::Blocked;
     }
-    // 2. Removable only after the user does something themselves.
+    // 2. Protection only narrows what can be removed. No permission can
+    //    override it, and no later rule may promote it.
+    if classes.contains(&Class::Protected) {
+        return Verdict::Blocked;
+    }
+    // 3. Removable only after the user does something themselves.
     if classes.contains(&Class::Locked) || classes.contains(&Class::OpenInHerdr) {
         return Verdict::Blocked;
     }
 
-    // 3. Safe. Every condition is a positive observation, and every one of them
+    // 4. Safe. Every condition is a positive observation, and every one of them
     //    is checked here rather than inferred from the class set alone, so that
     //    adding a class can never accidentally widen what is preselectable.
     let safe = !classes.contains(&Class::Dirty)
@@ -269,7 +282,7 @@ pub fn verdict_of(facts: &Facts, classes: &std::collections::BTreeSet<Class>) ->
         return Verdict::Safe;
     }
 
-    // 4. Some evidence of death, but not all of it.
+    // 5. Some evidence of death, but not all of it.
     let dying = [
         Class::Merged,
         Class::GoneUpstream,
@@ -295,6 +308,16 @@ pub fn reason_for(
 ) -> String {
     if facts.worktree.is_main {
         return main_checkout_phrase().to_string();
+    }
+    if let Some(pattern) = &facts.protected {
+        let path = crate::config::config_file();
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("config.json");
+        return format!(
+            "protected by pattern `{pattern}`; edit or remove that pattern in {file} to unblock"
+        );
     }
     if let Some(phrase) = locked_phrase(&facts.worktree) {
         return phrase;
