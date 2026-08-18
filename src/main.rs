@@ -2,7 +2,7 @@
 //!
 //! Verb dispatch only; every verb is implemented in the library crate.
 
-use shear::{config, remove, render, shear as scan, tui, Result};
+use shear::{config, remove, render, report, shear as scan, tui, Result};
 
 const USAGE: &str = "\
 shear — find the git worktrees that are safe to delete, and delete those
@@ -12,6 +12,7 @@ Usage: shear [VERB] [OPTIONS]
 Review:
   --list              Print the worktree inventory and exit (default)
   --json              Print the same inventory as JSON and exit
+  --report            Print the CI-shaped stale report; no removal path exists
   --review            Interactive review pane: select, confirm, remove
 
 Removal:
@@ -58,9 +59,10 @@ fn main() {
 /// moment the removal path grew flags that take no value: `shear --remove X
 /// --force-dirty` read `--force-dirty` as the verb and refused it. Listing the
 /// verbs is duller and cannot rot as options are added.
-const VERBS: [&str; 9] = [
+const VERBS: [&str; 10] = [
     "--list",
     "--json",
+    "--report",
     "--review",
     "--remove",
     "--restore",
@@ -186,6 +188,7 @@ fn run(args: &[String]) -> Result<()> {
     match verb {
         "--list" => render::run_list(&config::load_with_args(args)?),
         "--json" => scan::run_json(&config::load_with_args(args)?),
+        "--report" => report::run_report(&config::load_with_args(args)?),
         "--review" => tui::run_review(&config::load_with_args(args)?),
         "--remove" => remove::run_remove(&config::load_with_args(args)?, args),
         "--restore" => remove::run_restore(&config::load_with_args(args)?, args),
@@ -213,12 +216,22 @@ mod tests {
     #[test]
     fn the_verb_is_found_whatever_the_order() {
         assert_eq!(verb_of(&args(&["--review"])), "--review");
+        assert_eq!(verb_of(&args(&["--report"])), "--report");
         assert_eq!(verb_of(&args(&["--json", "--stale-days", "30"])), "--json");
         assert_eq!(verb_of(&args(&["--stale-days", "30", "--json"])), "--json");
         assert_eq!(verb_of(&args(&["--stale-days=30", "--json"])), "--json");
         assert_eq!(
             verb_of(&args(&["--repo", "/tmp/r", "--review"])),
             "--review"
+        );
+        assert_eq!(
+            verb_of(&args(&["--repo", "/tmp/r", "--report"])),
+            "--report"
+        );
+        assert_eq!(
+            verb_of(&args(&["--report", "--json"])),
+            "--report",
+            "the report verb is distinct from the inventory JSON verb"
         );
     }
 

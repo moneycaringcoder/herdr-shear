@@ -51,6 +51,7 @@ explicit selection:
 | --- | --- |
 | `shear --list` | Prints the inventory and exits. The default, and a dry run by construction. |
 | `shear --json` | The same inventory, machine-readable. |
+| `shear --report` | CI-shaped stale worktrees by repository, with no path to removal code. |
 | `shear --review` | Interactive review pane: select, confirm, remove. |
 | `shear --remove <PATH>` | Removes one named worktree, subject to every guard below. |
 | `shear --restore <id>` | Restores the checkout named by a `#N` from `--undo-log`. It returns on its branch only if that branch still points at the recorded commit; otherwise it returns detached at that commit, without creating or moving a branch. |
@@ -238,6 +239,7 @@ Requires herdr 0.8.0 or newer for the workspace half; linux and macOS.
 shear                          # the inventory, as a dry run
 shear --review                 # the interactive pane
 shear --repo ~/src/app --list  # one repository, no session needed
+shear --repo ~/src/app --report # CI-shaped stale report, no removal path
 shear --stale-days 30          # a slower definition of stale
 shear --integration-ref origin/trunk
 shear --no-size                # skip disk measurement entirely
