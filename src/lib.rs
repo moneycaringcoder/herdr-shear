@@ -8,7 +8,7 @@
 //! ```text
 //!   herdr session.snapshot ─┐
 //!   worktree.list  ─────────┤
-//!                           ├─> shear::scan ──> Inventory ──> render / tui
+//!                           ├─> shear::scan ──> Inventory ──> report / render / tui
 //!   git worktree list ──────┤                       │
 //!   git status/for-each-ref ┘                       └──> remove::remove_one
 //! ```
@@ -26,6 +26,7 @@ pub mod herdr;
 pub mod model;
 pub mod remove;
 pub mod render;
+pub mod report;
 pub mod shear;
 pub mod tui;
 

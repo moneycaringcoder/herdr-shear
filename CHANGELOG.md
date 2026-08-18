@@ -88,6 +88,19 @@ All notable changes to this project are documented here. The format follows
   attributable to a repository rather than being one global disclaimer; a
   repository with nothing safe in it says so, instead of reporting `0 B`
   reclaimable as though that were a measurement.
+- `--report`, a JSON document shaped for CI rather than for a person: per
+  repository, the verdict counts, the reclaimable and total bytes, and the rows
+  that have gone stale, with a `schema_version` so a consumer can tell when the
+  shape changes. It is a new verb rather than a flag on `--json`, because
+  changing the shape of an existing machine interface breaks every consumer that
+  ignores an unknown flag. A size that was not measured is `null` and never `0`,
+  an unknown tip age is `null` and never `0`, and each repository reports how
+  many rows went unmeasured so a byte figure is known to be a floor. The scan's
+  non-fatal notes are in the document too, so a repository that could not be read
+  is visible to a reader who never sees a terminal. It exits 0 always — a
+  threshold that fails a build is a separate decision — works with no herdr
+  socket at all, which is how CI will run it, and has no path to the removal
+  code: `report.rs` imports neither `remove` nor `tui`.
 
 ## [0.1.0] - 2026-08-16
 
