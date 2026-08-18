@@ -44,7 +44,7 @@ what forty look like.
 
 ## What it does
 
-Five verbs. Only two of them can remove anything, and neither does so without an
+Six verbs. Only two of them can remove anything, and neither does so without an
 explicit selection:
 
 | Verb | What it does |
@@ -53,6 +53,7 @@ explicit selection:
 | `shear --json` | The same inventory, machine-readable. |
 | `shear --review` | Interactive review pane: select, confirm, remove. |
 | `shear --remove <PATH>` | Removes one named worktree, subject to every guard below. |
+| `shear --restore <id>` | Restores the checkout named by a `#N` from `--undo-log`. It returns on its branch only if that branch still points at the recorded commit; otherwise it returns detached at that commit, without creating or moving a branch. |
 | `shear --undo-log` | Every removal shear has made, newest first, with the command that restores it. |
 
 The scan is read-only git plumbing (`worktree list`, `status --porcelain=v2`,
@@ -241,6 +242,7 @@ shear --stale-days 30          # a slower definition of stale
 shear --integration-ref origin/trunk
 shear --no-size                # skip disk measurement entirely
 shear --remove ~/src/app-wt/old-branch
+shear --restore 3
 shear --undo-log
 ```
 

@@ -25,8 +25,8 @@
 //! 7. Every removal is appended to the undo log *before* it is attempted, so a
 //!    removal that half-succeeds is still recoverable.
 //!
-//! The one git invocation that writes lives here rather than in `git.rs`. That
-//! module is documented and tested as read-only, so the mutating command has to
+//! The git invocations that write live here rather than in `git.rs`. That
+//! module is documented and tested as read-only, so mutating commands have to
 //! be somewhere the read-only claim is not made about.
 
 use std::path::{Path, PathBuf};
@@ -397,11 +397,19 @@ pub fn append_log(record: &RemovalRecord) -> Result<()> {
     Ok(())
 }
 
-/// Every record in the undo log, newest first.
+/// One readable undo-log record together with its stable, physical line number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggedRemoval {
+    pub id: usize,
+    pub record: RemovalRecord,
+}
+
+/// Every readable record in the undo log, newest first.
 ///
-/// A line that will not parse is reported and skipped rather than failing the
-/// read: one corrupt record must not hide every good one.
-pub fn read_log() -> Result<Vec<RemovalRecord>> {
+/// A blank or unreadable line is skipped, but still consumes its physical line
+/// number. That keeps the `#N` ids of the surrounding records from shifting
+/// when one damaged line cannot be read.
+pub fn read_log_numbered() -> Result<Vec<LoggedRemoval>> {
     let path = config::undo_log();
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
@@ -415,7 +423,10 @@ pub fn read_log() -> Result<Vec<RemovalRecord>> {
             continue;
         }
         match serde_json::from_str::<RemovalRecord>(line) {
-            Ok(record) => records.push(record),
+            Ok(record) => records.push(LoggedRemoval {
+                id: number + 1,
+                record,
+            }),
             Err(err) => eprintln!(
                 "shear: {}:{}: unreadable undo record ({err})",
                 path.display(),
@@ -425,6 +436,14 @@ pub fn read_log() -> Result<Vec<RemovalRecord>> {
     }
     records.reverse();
     Ok(records)
+}
+
+/// Every readable record in the undo log, newest first.
+pub fn read_log() -> Result<Vec<RemovalRecord>> {
+    Ok(read_log_numbered()?
+        .into_iter()
+        .map(|entry| entry.record)
+        .collect())
 }
 
 /// `--remove <PATH>` — non-interactive removal of explicitly named worktrees.
@@ -548,17 +567,19 @@ pub fn run_remove(config: &Config, args: &[String]) -> Result<()> {
 
 /// `--undo-log`.
 pub fn run_undo_log() -> Result<()> {
-    let records = read_log()?;
-    if records.is_empty() {
+    let entries = read_log_numbered()?;
+    if entries.is_empty() {
         println!(
             "shear: no removals recorded in {}",
             config::undo_log().display()
         );
         return Ok(());
     }
-    for record in records {
+    for entry in entries {
+        let record = entry.record;
         println!(
-            "{}  {}  [{}]  {}",
+            "#{}  {}  {}  [{}]  {}",
+            entry.id,
             record.at,
             record.path,
             record.branch.as_deref().unwrap_or("no branch"),
@@ -569,8 +590,242 @@ pub fn run_undo_log() -> Result<()> {
         }
         println!("  removed via {}", record.route);
         println!("  restore with: {}", record.restore_command);
+        println!("  or: shear --restore {}", entry.id);
     }
     Ok(())
+}
+
+/// What `--restore` put back without ever creating or moving a branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreOutcome {
+    OnBranch { branch: String, oid: String },
+    Detached { oid: String, why: String },
+}
+
+/// Restores one logged checkout at the commit it had when it was removed.
+pub fn restore_one(entry: &LoggedRemoval, config: &Config) -> Result<RestoreOutcome> {
+    let record = &entry.record;
+    let head_oid = record.head_oid.as_deref().ok_or_else(|| {
+        format!(
+            "#{}: nothing to restore to; that checkout never had a commit, so use a fresh `git \
+             worktree add` to get a checkout at {}",
+            entry.id, record.path
+        )
+    })?;
+    let path = Path::new(&record.path);
+    if !path.is_absolute() {
+        // An absolute path cannot be parsed as a git option. Together with the
+        // branch-name check below and the resolved oid, that makes a `--`
+        // separator unnecessary in this argv.
+        return Err(format!(
+            "#{}: recorded path {} is relative and cannot be resolved safely; use a fresh `git \
+             worktree add` with the intended absolute path",
+            entry.id,
+            path.display()
+        )
+        .into());
+    }
+    if path.exists() {
+        return Err(format!(
+            "#{}: {} already exists; move or delete that path, then restore again",
+            entry.id,
+            path.display()
+        )
+        .into());
+    }
+    let repo_root = Path::new(&record.repo_root);
+    if !repo_root.is_dir() {
+        return Err(format!(
+            "#{}: the recorded repository root {} is not an available directory; restore the \
+             repository at that path, then restore again",
+            entry.id,
+            repo_root.display()
+        )
+        .into());
+    }
+    let recorded_oid =
+        resolve_commit(repo_root, head_oid, config.git_timeout).ok_or_else(|| {
+            format!(
+                "#{}: recorded commit {head_oid} no longer resolves in {}; make that commit \
+                 available in the repository, then restore again",
+                entry.id,
+                repo_root.display()
+            )
+        })?;
+
+    let repo_root_arg = repo_root.to_string_lossy().into_owned();
+    let path_arg = path.to_string_lossy().into_owned();
+    let outcome;
+    let args: Vec<&str>;
+    match record.branch.as_deref() {
+        Some(branch) if !branch.starts_with('-') => {
+            // A bare name is ambiguous between refs/heads and refs/tags. Shear
+            // must only conclude that the branch is intact from the branch ref.
+            let branch_ref = format!("refs/heads/{branch}");
+            match resolve_commit(repo_root, &branch_ref, config.git_timeout) {
+                Some(branch_oid) if branch_oid == recorded_oid => {
+                    args = vec!["-C", &repo_root_arg, "worktree", "add", &path_arg, branch];
+                    outcome = RestoreOutcome::OnBranch {
+                        branch: branch.to_string(),
+                        oid: recorded_oid.clone(),
+                    };
+                }
+                Some(branch_oid) => {
+                    args = vec![
+                        "-C",
+                        &repo_root_arg,
+                        "worktree",
+                        "add",
+                        "--detach",
+                        &path_arg,
+                        &recorded_oid,
+                    ];
+                    outcome = RestoreOutcome::Detached {
+                        oid: recorded_oid.clone(),
+                        why: format!(
+                            "the branch {branch} still exists but has moved to {branch_oid}, and \
+                             shear does not move a branch to make a checkout come back"
+                        ),
+                    };
+                }
+                None => {
+                    args = vec![
+                        "-C",
+                        &repo_root_arg,
+                        "worktree",
+                        "add",
+                        "--detach",
+                        &path_arg,
+                        &recorded_oid,
+                    ];
+                    outcome = RestoreOutcome::Detached {
+                        oid: recorded_oid.clone(),
+                        why: format!(
+                            "the branch {branch} no longer exists, and shear does not create a \
+                             branch to make a checkout come back"
+                        ),
+                    };
+                }
+            }
+        }
+        Some(branch) => {
+            args = vec![
+                "-C",
+                &repo_root_arg,
+                "worktree",
+                "add",
+                "--detach",
+                &path_arg,
+                &recorded_oid,
+            ];
+            outcome = RestoreOutcome::Detached {
+                oid: recorded_oid.clone(),
+                why: format!(
+                    "the recorded branch name {branch} begins with a dash and so cannot be handed \
+                     to git safely; the checkout therefore comes back detached at the recorded \
+                     commit"
+                ),
+            };
+        }
+        None => {
+            args = vec![
+                "-C",
+                &repo_root_arg,
+                "worktree",
+                "add",
+                "--detach",
+                &path_arg,
+                &recorded_oid,
+            ];
+            outcome = RestoreOutcome::Detached {
+                oid: recorded_oid.clone(),
+                why: "the checkout had no branch when it was removed".to_string(),
+            };
+        }
+    }
+
+    // restore_command is shell-quoted text for a human to paste. Rebuilding the
+    // argv avoids inheriting a quoting bug and keeps the undo log from becoming
+    // an execution vector.
+    run_git(&args, config.git_timeout)?;
+    Ok(outcome)
+}
+
+fn resolve_commit(repo_root: &Path, rev: &str, timeout: Duration) -> Option<String> {
+    let commit = format!("{rev}^{{commit}}");
+    let stdout = crate::git::run(
+        repo_root,
+        &["rev-parse", "--verify", "--quiet", &commit],
+        timeout,
+    )
+    .ok()?;
+    let oid = String::from_utf8(stdout).ok()?.trim().to_string();
+    (!oid.is_empty()).then_some(oid)
+}
+
+/// `--restore <id>` — restore one checkout selected from `--undo-log`.
+pub fn run_restore(config: &Config, args: &[String]) -> Result<()> {
+    let id = parse_restore_id(args)?;
+    let undo_log = config::undo_log();
+    let entry = read_log_numbered()?
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| {
+            format!(
+                "#{id}: no readable removal in {} has that id; run `shear --undo-log` to see the \
+                 ids that exist",
+                undo_log.display()
+            )
+        })?;
+    let outcome = restore_one(&entry, config)?;
+    match outcome {
+        RestoreOutcome::OnBranch { branch, oid } => {
+            println!("restored {} on branch {branch} at {oid}", entry.record.path);
+        }
+        RestoreOutcome::Detached { oid, why } => {
+            println!("restored {} detached at {oid}", entry.record.path);
+            println!("  {why}");
+        }
+    }
+    // Observed in herdr 0.8.0: there is a call that removes a worktree and
+    // closes its workspace, but no call that opens a workspace at a path.
+    if entry.record.route == "herdr" {
+        println!("  the checkout is back, but the closed herdr workspace is not reopened");
+    }
+    Ok(())
+}
+
+fn parse_restore_id(args: &[String]) -> Result<usize> {
+    const HELP: &str = "ids are the #N numbers `shear --undo-log` prints";
+    let mut id = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        let value = if let Some(value) = arg.strip_prefix("--restore=") {
+            Some(value)
+        } else if arg == "--restore" {
+            Some(
+                rest.next()
+                    .ok_or_else(|| format!("--restore needs an id; {HELP}"))?
+                    .as_str(),
+            )
+        } else {
+            None
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        if id.is_some() {
+            return Err("--restore accepts one id at a time".into());
+        }
+        let parsed = value
+            .parse::<usize>()
+            .map_err(|_| format!("--restore `{value}` is not an id; {HELP}"))?;
+        if parsed == 0 {
+            return Err(format!("--restore `0` is not an id; {HELP}").into());
+        }
+        id = Some(parsed);
+    }
+    id.ok_or_else(|| format!("--restore needs an id; {HELP}").into())
 }
 
 /// The paths and permissions `--remove` was given.
@@ -691,7 +946,7 @@ fn run_git(args: &[&str], timeout: Duration) -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // A repository's own environment must not redirect the command: the
-        // worktree we were told to remove is the one that goes.
+        // explicitly selected worktree is the one that must change.
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
