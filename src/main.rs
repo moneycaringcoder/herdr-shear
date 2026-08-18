@@ -18,6 +18,9 @@ Removal:
   --remove <PATH>     Remove one worktree by path. Repeatable. Refuses anything
                       dirty, locked, or open in herdr unless the matching
                       override below is also given.
+  --restore <id>      Restore the checkout named by a #N from --undo-log.
+                      Uses its branch only if it still points at the recorded
+                      commit; otherwise restores detached at that commit.
   --force-dirty       Permit removing a worktree with uncommitted changes.
                       Requires --i-understand-<N>-files, where N is the exact
                       number of at-risk files shear reports.
@@ -55,11 +58,12 @@ fn main() {
 /// moment the removal path grew flags that take no value: `shear --remove X
 /// --force-dirty` read `--force-dirty` as the verb and refused it. Listing the
 /// verbs is duller and cannot rot as options are added.
-const VERBS: [&str; 8] = [
+const VERBS: [&str; 9] = [
     "--list",
     "--json",
     "--review",
     "--remove",
+    "--restore",
     "--undo-log",
     "--version",
     "--help",
@@ -67,7 +71,13 @@ const VERBS: [&str; 8] = [
 ];
 
 /// Options that take a value.
-const VALUED: [&str; 4] = ["--repo", "--integration-ref", "--stale-days", "--remove"];
+const VALUED: [&str; 5] = [
+    "--repo",
+    "--integration-ref",
+    "--stale-days",
+    "--remove",
+    "--restore",
+];
 
 /// Options that take no value.
 const FLAGS: [&str; 3] = ["--force-dirty", "--close-workspace", "--no-size"];
@@ -99,9 +109,9 @@ fn verb_of(args: &[String]) -> &str {
         if VALUED.contains(&name) {
             // `--repo=/x` carries its value; bare `--repo /x` does not.
             skip_value = !arg.contains('=');
-            // `--remove` is both a verb and a repeatable valued option; its
-            // value must not be consumed as the verb, so it is picked up after
-            // the loop instead.
+            // `--remove` and `--restore` are both verbs and valued options;
+            // their values must not be consumed as verbs, so they are picked
+            // up after the loop instead.
             continue;
         }
         if VERBS.contains(&name) {
@@ -112,11 +122,13 @@ fn verb_of(args: &[String]) -> &str {
                 .unwrap_or("--list");
         }
     }
-    if args
-        .iter()
-        .any(|a| a == "--remove" || a.starts_with("--remove="))
-    {
-        return "--remove";
+    for verb in ["--remove", "--restore"] {
+        if args
+            .iter()
+            .any(|arg| arg == verb || arg.starts_with(&format!("{verb}=")))
+        {
+            return verb;
+        }
     }
     "--list"
 }
@@ -127,6 +139,16 @@ fn verb_of(args: &[String]) -> &str {
 /// `--force-dirty` is the good case. A silently ignored `--repo` would scan the
 /// whole session when the user asked for one repository.
 fn reject_unknown(args: &[String]) -> Result<()> {
+    let has_remove = args
+        .iter()
+        .any(|arg| arg == "--remove" || arg.starts_with("--remove="));
+    let has_restore = args
+        .iter()
+        .any(|arg| arg == "--restore" || arg.starts_with("--restore="));
+    if has_remove && has_restore {
+        return Err("--remove and --restore are two different verbs; run one at a time".into());
+    }
+
     let mut skip_value = false;
     for arg in args {
         if skip_value {
@@ -166,6 +188,7 @@ fn run(args: &[String]) -> Result<()> {
         "--json" => scan::run_json(&config::load_with_args(args)?),
         "--review" => tui::run_review(&config::load_with_args(args)?),
         "--remove" => remove::run_remove(&config::load_with_args(args)?, args),
+        "--restore" => remove::run_restore(&config::load_with_args(args)?, args),
         "--undo-log" => remove::run_undo_log(),
         "--version" => {
             println!("shear {}", env!("CARGO_PKG_VERSION"));
@@ -220,6 +243,32 @@ mod tests {
             verb_of(&args(&["--remove", "/tmp/a", "--remove", "/tmp/b"])),
             "--remove"
         );
+    }
+
+    #[test]
+    fn restore_selects_its_own_verb_and_its_id_is_only_a_value() {
+        assert_eq!(verb_of(&args(&["--restore", "3"])), "--restore");
+        assert_eq!(verb_of(&args(&["--restore=3"])), "--restore");
+        assert_eq!(
+            verb_of(&args(&["--restore", "3", "--no-size"])),
+            "--restore"
+        );
+    }
+
+    #[test]
+    fn restore_is_found_after_another_valued_option() {
+        assert_eq!(
+            verb_of(&args(&["--repo", "/x", "--restore", "3"])),
+            "--restore"
+        );
+    }
+
+    #[test]
+    fn remove_and_restore_are_rejected_as_two_different_verbs() {
+        let err = reject_unknown(&args(&["--remove", "/x", "--restore", "3"]))
+            .expect_err("two verbs must be refused");
+        assert!(err.to_string().contains("two different verbs"));
+        assert!(err.to_string().contains("one at a time"));
     }
 
     /// The regression test for the bug that made the whole dirty-removal path
