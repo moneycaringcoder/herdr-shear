@@ -84,7 +84,6 @@ pub fn scan(config: &Config) -> Result<Inventory> {
     }
 
     let now = SystemTime::now();
-    let stale_after = config.stale_after();
 
     for repo in &repos {
         let worktrees = match git::worktrees(&repo.root, config.git_timeout) {
@@ -215,6 +214,10 @@ pub fn scan(config: &Config) -> Result<Inventory> {
                 dirt,
                 worktree,
             };
+            // Policy resolution belongs here because this caller already knows
+            // the merge and upstream facts; the classifier stays a pure
+            // function of one threshold.
+            let stale_after = config.stale_after_for(&facts.merged, &facts.upstream);
             inventory
                 .candidates
                 .push(classify::classify(facts, stale_after, now));

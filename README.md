@@ -271,11 +271,20 @@ optional:
 {
   "integration_ref": "origin/main",
   "stale_days": 14,
+  "stale_rules": [
+    {"when": "merged", "days": 30},
+    {"when": "unmerged", "days": 90}
+  ],
   "git_timeout_seconds": 10,
   "measure_disk": true,
   "extra_repos": ["/home/you/src/other-repo"]
 }
 ```
+
+`stale_rules` are tried in order; the first matching `any`, `merged`,
+`unmerged`, or `gone` rule supplies that worktree's threshold. `stale_days`
+remains the fallback when no rule matches. A merge question that could not be
+asked matches only `any`, never `merged` or `unmerged`.
 
 The undo log lives at
 `~/.local/state/herdr/plugins/moneycaringcoder.shear/removed.jsonl`.

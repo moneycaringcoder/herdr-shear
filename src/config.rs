@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::model::{Merged, Upstream};
 use crate::Result;
 
 pub const PLUGIN_ID: &str = "moneycaringcoder.shear";
@@ -17,6 +18,43 @@ pub const DEFAULT_STALE_DAYS: u64 = 14;
 /// because it is the only one that is actually authoritative.
 pub const DEFAULT_BRANCH_GUESSES: [&str; 4] = ["origin/main", "origin/master", "main", "master"];
 
+/// The fact a staleness rule is conditioned on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StaleWhen {
+    Any,
+    Merged,
+    Unmerged,
+    Gone,
+}
+
+impl StaleWhen {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Merged => "merged",
+            Self::Unmerged => "unmerged",
+            Self::Gone => "gone",
+        }
+    }
+
+    fn matches(self, merged: &Merged, upstream: &Upstream) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Merged => matches!(merged, Merged::Into(_)),
+            Self::Unmerged => matches!(merged, Merged::No(_)),
+            Self::Gone => upstream.gone,
+        }
+    }
+}
+
+/// One ordered override of the fallback staleness threshold.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct StaleRule {
+    pub when: StaleWhen,
+    pub days: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Ref a branch must be contained in to count as merged. `None` means
@@ -29,6 +67,8 @@ pub struct Config {
     /// built to avoid.
     pub integration_ref: Option<String>,
     pub stale_days: u64,
+    /// Ordered staleness overrides. The first matching rule wins.
+    pub stale_rules: Vec<StaleRule>,
     /// Timeout for any single git invocation, so one slow or wedged repo cannot
     /// stall a scan.
     pub git_timeout: Duration,
@@ -47,6 +87,7 @@ impl Default for Config {
         Self {
             integration_ref: None,
             stale_days: DEFAULT_STALE_DAYS,
+            stale_rules: Vec::new(),
             git_timeout: Duration::from_secs(10),
             measure_disk: true,
             extra_repos: Vec::new(),
@@ -58,6 +99,18 @@ impl Default for Config {
 impl Config {
     pub fn stale_after(&self) -> Duration {
         Duration::from_secs(self.stale_days.saturating_mul(86_400))
+    }
+
+    /// Resolves the first matching policy rule, or the `stale_days` fallback.
+    pub fn stale_after_for(&self, merged: &Merged, upstream: &Upstream) -> Duration {
+        self.stale_rules
+            .iter()
+            // `Unknown` deliberately matches neither merged nor unmerged: a
+            // question that could not be asked is not an answer.
+            // Config values built in code never pass through `load_file`, so keep this check.
+            .find(|rule| rule.days > 0 && rule.when.matches(merged, upstream))
+            .map(|rule| Duration::from_secs(rule.days.saturating_mul(86_400)))
+            .unwrap_or_else(|| self.stale_after())
     }
 }
 
@@ -99,6 +152,7 @@ pub fn load_with_args(args: &[String]) -> Result<Config> {
 struct FileConfig {
     integration_ref: Option<String>,
     stale_days: Option<u64>,
+    stale_rules: Option<Vec<StaleRule>>,
     git_timeout_seconds: Option<u64>,
     measure_disk: Option<bool>,
     extra_repos: Option<Vec<String>>,
@@ -136,6 +190,25 @@ fn load_file() -> Config {
     }
     if let Some(days) = file.stale_days {
         config.stale_days = days;
+    }
+    if let Some(rules) = file.stale_rules {
+        config.stale_rules = rules
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, rule)| {
+                if rule.days == 0 {
+                    // Zero would mark virtually every branch stale, so it is
+                    // much more likely to be a typo than an intended policy.
+                    eprintln!(
+                        "shear: ignoring stale_rules[{index}] ({}): days must be greater than zero",
+                        rule.when.label()
+                    );
+                    None
+                } else {
+                    Some(rule)
+                }
+            })
+            .collect();
     }
     if let Some(seconds) = file.git_timeout_seconds {
         config.git_timeout = Duration::from_secs(seconds.max(1));
