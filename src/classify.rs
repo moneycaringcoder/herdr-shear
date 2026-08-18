@@ -94,6 +94,11 @@ pub fn signals(candidate: &Candidate, now: SystemTime) -> Vec<String> {
     // `Class` derives `Ord` in declaration order.
     for class in &candidate.classes {
         match class {
+            Class::Protected => {
+                if let Some(pattern) = &candidate.protected {
+                    signals.push(protected_phrase(pattern));
+                }
+            }
             Class::Dirty if candidate.dirt.is_dirty() => {
                 signals.push(dirt_phrase(&candidate.dirt));
             }
@@ -156,6 +161,9 @@ pub fn signals(candidate: &Candidate, now: SystemTime) -> Vec<String> {
 fn first_failed_safe_condition(candidate: &Candidate) -> String {
     if candidate.worktree.is_main {
         return "not safe: this is the main checkout".to_string();
+    }
+    if let Some(pattern) = &candidate.protected {
+        return format!("not safe: {}", protected_phrase(pattern));
     }
     if candidate.worktree.locked.is_some() {
         return "not safe: the checkout is locked".to_string();
@@ -310,14 +318,7 @@ pub fn reason_for(
         return main_checkout_phrase().to_string();
     }
     if let Some(pattern) = &facts.protected {
-        let path = crate::config::config_file();
-        let file = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("config.json");
-        return format!(
-            "protected by pattern `{pattern}`; edit or remove that pattern in {file} to unblock"
-        );
+        return protected_phrase(pattern);
     }
     if let Some(phrase) = locked_phrase(&facts.worktree) {
         return phrase;
@@ -349,6 +350,15 @@ pub fn reason_for(
 
 fn main_checkout_phrase() -> &'static str {
     "main checkout; never a removal candidate"
+}
+
+fn protected_phrase(pattern: &str) -> String {
+    let path = crate::config::config_file();
+    let file = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.json");
+    format!("protected by pattern `{pattern}`; edit or remove that pattern in {file} to unblock")
 }
 
 fn locked_phrase(worktree: &Worktree) -> Option<String> {
