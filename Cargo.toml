@@ -1,6 +1,6 @@
 [package]
 name = "shear"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Finds git worktrees that are safe to delete, and removes the ones you pick."
 license = "MIT"
