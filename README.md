@@ -119,6 +119,7 @@ exactly one **verdict**, which is what shear is willing to do with it.
 
 | Class | Meaning |
 | --- | --- |
+| `protected` | The absolute checkout path or branch matched a configured `protect` pattern. Never removable while that pattern remains. |
 | `dirty` | Uncommitted changes: staged, unstaged, untracked or unmerged. Overrides everything for safety. |
 | `locked` | `git worktree lock` was used on it. Somebody's explicit "do not touch this". |
 | `open` | A herdr workspace currently holds this checkout open. |
@@ -138,10 +139,10 @@ branch would otherwise report every worktree as unmerged. Nothing carrying
 
 | Verdict | Meaning |
 | --- | --- |
-| `safe` | Clean, merged into the integration ref, upstream gone, not locked, not open in herdr, not the main checkout. The **only** verdict a bulk action may preselect. |
+| `safe` | Clean, merged into the integration ref, upstream gone, not protected, not locked, not open in herdr, not the main checkout. The **only** verdict a bulk action may preselect. |
 | `review` | Some evidence of death, but not all of it. Removable, never preselected. |
 | `keep` | Nothing suggests this is dead. Removable only by explicit selection. |
-| `blocked` | Cannot be removed as things stand — locked, open in herdr, or the main checkout. The row names the unblocking action. |
+| `blocked` | Cannot be removed as things stand — protected, locked, open in herdr, or the main checkout. The row names the unblocking action. |
 
 Every condition in `safe` must be a *positive* observation. An unanswerable
 question fails the test rather than passing it.
@@ -156,20 +157,23 @@ safe worktrees at all rather than a listing full of them.
 ## Safety rules
 
 1. **The main checkout is never removable.** There is no override.
-2. **A locked worktree is never removable.** Unlock it yourself with
+2. **A protected worktree is never removable.** Its row names the matching
+   `protect` pattern; edit or remove that pattern from `config.json` to unblock
+   it. No flag or permission overrides protection.
+3. **A locked worktree is never removable.** Unlock it yourself with
    `git worktree unlock`; shear will not do it on your behalf.
-3. **A worktree open in a herdr workspace** is removable only when you have
+4. **A worktree open in a herdr workspace** is removable only when you have
    explicitly permitted closing that workspace, and then only through herdr's
    `worktree.remove`, which closes the workspace as part of the removal. The
    review pane never does this — it shows you which workspace to close.
-4. **A dirty worktree** is removable only with `--force-dirty`, which itself
+5. **A dirty worktree** is removable only with `--force-dirty`, which itself
    requires `--i-understand-<N>-files` naming the exact at-risk count. In the
    review pane, you type that number. A confirmation that can be given without
    reading the number is not a confirmation.
-5. **Never `rm -rf`.** Removal is `git worktree remove`, or herdr's
+6. **Never `rm -rf`.** Removal is `git worktree remove`, or herdr's
    `worktree.remove` for a checkout herdr holds open. Both leave the branch and
    every commit on it in place.
-6. **Every removal is logged before it is attempted**, with the HEAD oid and the
+7. **Every removal is logged before it is attempted**, with the HEAD oid and the
    command that puts the checkout back, so a removal that half-succeeds is still
    recoverable.
 
@@ -275,6 +279,7 @@ optional:
     {"when": "merged", "days": 30},
     {"when": "unmerged", "days": 90}
   ],
+  "protect": ["release-*", "/home/you/src/shared/**"],
   "git_timeout_seconds": 10,
   "measure_disk": true,
   "extra_repos": ["/home/you/src/other-repo"]
@@ -285,6 +290,12 @@ optional:
 `unmerged`, or `gone` rule supplies that worktree's threshold. `stale_days`
 remains the fallback when no rule matches. A merge question that could not be
 asked matches only `any`, never `merged` or `unmerged`.
+
+`protect` patterns are matched against both the absolute checkout path and the
+branch name. `*` matches within one path segment (or anywhere in a branch name);
+`**` can also cross `/`. Nothing else has shell or regex meaning. A matching row
+stays visible but is blocked, names the matching pattern, and cannot be removed
+by any flag.
 
 The undo log lives at
 `~/.local/state/herdr/plugins/moneycaringcoder.shear/removed.jsonl`.

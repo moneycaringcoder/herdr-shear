@@ -42,6 +42,7 @@ impl Row {
             merged: Merged::No("origin/main".into()),
             last_commit: Some(SystemTime::now() - Duration::from_secs(21 * 86_400 + 43_200)),
             open_workspace: None,
+            protected: None,
             classes: BTreeSet::new(),
             verdict: Verdict::Keep,
             size: Size::Pending,
