@@ -6,12 +6,13 @@ mod fixtures;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use shear::config::{self, Config, StaleRule, StaleWhen};
-use shear::model::{Merged, Upstream, Verdict};
+use shear::model::{Class, Merged, Upstream, Verdict};
 use shear::shear as pipeline;
 
 use fixtures::Fixture;
@@ -77,6 +78,37 @@ fn upstream(gone: bool) -> Upstream {
 
 fn rule(when: StaleWhen, days: u64) -> StaleRule {
     StaleRule { when, days }
+}
+
+#[test]
+fn protect_matcher_treats_every_non_star_character_literally() {
+    assert!(config::pattern_matches("release-*", "release-2026.08"));
+    assert!(!config::pattern_matches(
+        "release-*",
+        "feature/release-2026.08"
+    ));
+    assert!(config::pattern_matches("[release]", "[release]"));
+    assert!(!config::pattern_matches("[release]", "r"));
+    assert!(config::branch_pattern_matches(
+        "feature*",
+        "feature/release"
+    ));
+}
+
+#[test]
+fn single_star_stays_in_one_path_segment_while_double_star_crosses_slashes() {
+    assert!(config::pattern_matches(
+        "/home/*/checkout",
+        "/home/alice/checkout"
+    ));
+    assert!(!config::pattern_matches(
+        "/home/*/checkout",
+        "/home/alice/src/checkout"
+    ));
+    assert!(config::pattern_matches(
+        "/home/**/checkout",
+        "/home/alice/src/checkout"
+    ));
 }
 
 #[test]
@@ -257,6 +289,165 @@ fn assert_present(inventory: &shear::model::Inventory, path: &Path) {
         inventory.find(path).is_some(),
         "{} is missing from the inventory",
         path.display()
+    );
+}
+
+fn scan_with_protect(
+    fixture: &Fixture,
+    tag: &str,
+    patterns: &[&str],
+) -> (ConfigDir, shear::model::Inventory) {
+    std::env::set_var(
+        "HERDR_SOCKET_PATH",
+        "/nonexistent/shear-protect-policy.sock",
+    );
+    let contents = serde_json::json!({
+        "integration_ref": "main",
+        "protect": patterns,
+    })
+    .to_string();
+    let (dir, mut config) = load_config(tag, &contents);
+    config.only_repos = vec![fixture.repo.clone()];
+    let inventory = pipeline::scan(&config).expect("scan with protect policy");
+    (dir, inventory)
+}
+
+#[test]
+fn a_path_pattern_protects_a_visible_row_and_names_the_unblocking_action() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    let fixture = Fixture::new("protect-path");
+    let checkout = fixture.safe_worktree("owned");
+    let pattern = format!("{}*", checkout.display());
+    let (_dir, inventory) = scan_with_protect(&fixture, "protect-path", &[&pattern]);
+
+    let candidate = inventory
+        .find(&checkout)
+        .expect("protected checkout remains visible");
+    assert_eq!(candidate.protected.as_deref(), Some(pattern.as_str()));
+    assert!(candidate.is(Class::Protected));
+    assert_eq!(candidate.verdict, Verdict::Blocked);
+    assert!(
+        candidate.reason.contains(&pattern)
+            && candidate.reason.contains("config.json")
+            && candidate.reason.contains("edit or remove"),
+        "the row names the pattern, file, and action: {}",
+        candidate.reason
+    );
+    assert!(
+        inventory
+            .notes
+            .iter()
+            .any(|note| note.contains("1 protected worktree")),
+        "the scan counts the visible protected row: {:?}",
+        inventory.notes
+    );
+}
+
+#[test]
+fn a_branch_pattern_protects_the_matching_branch() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    let fixture = Fixture::new("protect-branch");
+    let checkout = fixture.active_worktree("release-candidate");
+    let pattern = "release-*-branch";
+    let (_dir, inventory) = scan_with_protect(&fixture, "protect-branch", &[pattern]);
+
+    let candidate = inventory.find(&checkout).expect("branch checkout");
+    assert_eq!(candidate.branch(), Some("release-candidate-branch"));
+    assert_eq!(candidate.protected.as_deref(), Some(pattern));
+    assert_eq!(candidate.verdict, Verdict::Blocked);
+}
+
+#[test]
+fn a_pattern_matching_nothing_leaves_every_verdict_unchanged() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    let fixture = Fixture::new("protect-no-match");
+    fixture.safe_worktree("safe");
+    fixture.active_worktree("active");
+
+    let (_baseline_dir, baseline) = scan_with_protect(&fixture, "protect-empty", &[]);
+    let (_protected_dir, protected) =
+        scan_with_protect(&fixture, "protect-no-match", &["does-not-exist-*"]);
+
+    assert_eq!(verdict_rows(&protected), verdict_rows(&baseline));
+    assert!(protected
+        .candidates
+        .iter()
+        .all(|candidate| candidate.protected.is_none()));
+}
+
+#[test]
+fn an_empty_pattern_is_ignored_with_an_indexed_warning() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    let fixture = Fixture::new("protect-empty-warning");
+    let (dir, config) = load_config(
+        "protect-empty-warning",
+        r#"{"protect": ["release-*", "", "owned/**"]}"#,
+    );
+    assert_eq!(config.protect, vec!["release-*", "owned/**"]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_shear"))
+        .args(["--list", "--repo"])
+        .arg(&fixture.repo)
+        .env("HERDR_PLUGIN_CONFIG_DIR", &dir.path)
+        .env(
+            "HERDR_SOCKET_PATH",
+            "/nonexistent/shear-protect-warning.sock",
+        )
+        .output()
+        .expect("run shear with an empty protection pattern");
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("shear: ignoring protect[1]: pattern must not be empty"),
+        "warning names the ignored index: {stderr}"
+    );
+}
+
+#[test]
+fn protecting_the_main_checkout_does_not_change_its_blocked_verdict() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    let fixture = Fixture::new("protect-main");
+    fixture.safe_worktree("safe");
+
+    let (_baseline_dir, baseline) = scan_with_protect(&fixture, "protect-main-baseline", &[]);
+    let (_protected_dir, protected) = scan_with_protect(&fixture, "protect-main-policy", &["main"]);
+
+    assert_eq!(verdict_rows(&protected), verdict_rows(&baseline));
+    let main = protected.find(&fixture.repo).expect("main checkout");
+    assert_eq!(main.verdict, Verdict::Blocked);
+    assert_eq!(main.protected.as_deref(), Some("main"));
+    assert!(main.is(Class::Protected));
+    assert!(main.reason.contains("main checkout"));
+}
+
+#[test]
+fn a_pattern_matching_everything_leaves_no_selectable_rows_and_is_counted() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    let fixture = Fixture::new("protect-all");
+    fixture.safe_worktree("safe");
+    fixture.active_worktree("active");
+    let (_dir, inventory) = scan_with_protect(&fixture, "protect-all", &["**"]);
+
+    assert_eq!(inventory.safe().count(), 0);
+    assert!(inventory.candidates.iter().all(|candidate| {
+        candidate.verdict == Verdict::Blocked
+            && candidate.is(Class::Protected)
+            && candidate.protected.as_deref() == Some("**")
+    }));
+    let count = inventory.candidates.len();
+    assert!(
+        inventory
+            .notes
+            .iter()
+            .any(|note| note.contains(&format!("{count} protected worktrees"))),
+        "the note counts every protected row: {:?}",
+        inventory.notes
     );
 }
 

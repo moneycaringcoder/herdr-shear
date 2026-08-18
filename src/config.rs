@@ -69,6 +69,8 @@ pub struct Config {
     pub stale_days: u64,
     /// Ordered staleness overrides. The first matching rule wins.
     pub stale_rules: Vec<StaleRule>,
+    /// Patterns that make matching worktrees permanently ineligible for removal.
+    pub protect: Vec<String>,
     /// Timeout for any single git invocation, so one slow or wedged repo cannot
     /// stall a scan.
     pub git_timeout: Duration,
@@ -88,6 +90,7 @@ impl Default for Config {
             integration_ref: None,
             stale_days: DEFAULT_STALE_DAYS,
             stale_rules: Vec::new(),
+            protect: Vec::new(),
             git_timeout: Duration::from_secs(10),
             measure_disk: true,
             extra_repos: Vec::new(),
@@ -112,6 +115,61 @@ impl Config {
             .map(|rule| Duration::from_secs(rule.days.saturating_mul(86_400)))
             .unwrap_or_else(|| self.stale_after())
     }
+}
+/// Matches a protection pattern against an absolute checkout path.
+///
+/// `*` matches any run of characters within one path segment, while `**`
+/// matches any run including `/`. Every other character is literal. Regex
+/// syntax, character classes, brace expansion, escaping, and case-insensitive
+/// matching are not supported.
+pub fn pattern_matches(pattern: &str, text: &str) -> bool {
+    pattern_matches_inner(pattern, text, true)
+}
+
+/// Matches the same protection pattern language against a branch name.
+///
+/// Branch names are a single candidate rather than filesystem segments, so
+/// both `*` and `**` may consume `/`. No other syntax is supported.
+pub fn branch_pattern_matches(pattern: &str, text: &str) -> bool {
+    pattern_matches_inner(pattern, text, false)
+}
+
+fn pattern_matches_inner(pattern: &str, text: &str, slash_is_separator: bool) -> bool {
+    if !pattern.as_bytes().contains(&b'*') {
+        return pattern == text;
+    }
+
+    // `matched[n]` says whether the pattern consumed so far matches the first
+    // `n` bytes. UTF-8 is safe here: literals are compared byte-for-byte and a
+    // wildcard accepting an arbitrary run has the same answer at byte and
+    // character boundaries.
+    let text = text.as_bytes();
+    let mut matched = vec![false; text.len() + 1];
+    matched[0] = true;
+    let pattern = pattern.as_bytes();
+    let mut offset = 0;
+
+    while offset < pattern.len() {
+        if pattern[offset] == b'*' {
+            let crosses_separator = offset + 1 < pattern.len() && pattern[offset + 1] == b'*';
+            if crosses_separator {
+                offset += 1;
+            }
+            for index in 1..=text.len() {
+                matched[index] = matched[index]
+                    || (crosses_separator || !slash_is_separator || text[index - 1] != b'/')
+                        && matched[index - 1];
+            }
+        } else {
+            for index in (1..=text.len()).rev() {
+                matched[index] = matched[index - 1] && text[index - 1] == pattern[offset];
+            }
+            matched[0] = false;
+        }
+        offset += 1;
+    }
+
+    matched[text.len()]
 }
 
 pub fn load() -> Result<Config> {
@@ -153,12 +211,13 @@ struct FileConfig {
     integration_ref: Option<String>,
     stale_days: Option<u64>,
     stale_rules: Option<Vec<StaleRule>>,
+    protect: Option<Vec<String>>,
     git_timeout_seconds: Option<u64>,
     measure_disk: Option<bool>,
     extra_repos: Option<Vec<String>>,
 }
 
-fn config_file() -> PathBuf {
+pub(crate) fn config_file() -> PathBuf {
     config_dir().join("config.json")
 }
 
@@ -206,6 +265,20 @@ fn load_file() -> Config {
                     None
                 } else {
                     Some(rule)
+                }
+            })
+            .collect();
+    }
+    if let Some(patterns) = file.protect {
+        config.protect = patterns
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, pattern)| {
+                if pattern.is_empty() {
+                    eprintln!("shear: ignoring protect[{index}]: pattern must not be empty");
+                    None
+                } else {
+                    Some(pattern)
                 }
             })
             .collect();
