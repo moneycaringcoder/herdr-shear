@@ -23,6 +23,21 @@ All notable changes to this project are documented here. The format follows
   scheduled and manual only, it is not a required check, and a red canary is a
   signal to read herdr's recent changes rather than a reason to hold a pull
   request.
+- Staleness can be written down as a rule rather than a single number.
+  `stale_rules` in the config file takes an ordered list of `{"when", "days"}`
+  entries, where `when` is `any`, `merged`, `unmerged` or `gone`, and the first
+  matching rule wins: "merged and untouched for thirty days" and "unmerged and
+  untouched for ninety" are now one judgement made once rather than one made
+  repeatedly by eye. `stale_days` stays the fallback when no rule matches, so an
+  absent or empty list behaves exactly as before. A branch whose merge question
+  could not be asked matches only `any`, because a question that could not be
+  asked is not an answer. A rule of zero days is ignored with a warning naming
+  the rule as it was spelled: it would mark nearly every branch stale, which is
+  far more likely to be a typo than a policy. The rules change what is
+  *offered* — a row can move from `keep` to `review` — and nothing else: which
+  worktrees are `safe`, and therefore which the review pane's bulk key may
+  preselect, is unchanged by any rule, and a test pins that on a real
+  repository.
 
 ## [0.1.0] - 2026-08-16
 
