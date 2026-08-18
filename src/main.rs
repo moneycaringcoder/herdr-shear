@@ -59,7 +59,7 @@ fn main() {
 /// moment the removal path grew flags that take no value: `shear --remove X
 /// --force-dirty` read `--force-dirty` as the verb and refused it. Listing the
 /// verbs is duller and cannot rot as options are added.
-const VERBS: [&str; 9] = [
+const VERBS: [&str; 10] = [
     "--list",
     "--json",
     "--report",
