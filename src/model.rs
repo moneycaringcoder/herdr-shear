@@ -153,6 +153,10 @@ pub struct Upstream {
 /// alarming reason first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Class {
+    /// A configured pattern matched this checkout. First because declaration
+    /// order is display significance and protection is stronger than any death
+    /// signal.
+    Protected,
     /// Uncommitted changes. Overrides everything for the purposes of safety.
     Dirty,
     /// `git worktree list` reports `locked`. Never removable without unlocking.
@@ -173,6 +177,7 @@ pub enum Class {
 impl Class {
     pub fn label(self) -> &'static str {
         match self {
+            Class::Protected => "protected",
             Class::Dirty => "dirty",
             Class::Locked => "locked",
             Class::OpenInHerdr => "open",
@@ -192,16 +197,16 @@ impl Class {
 /// also somewhere else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Verdict {
-    /// Clean, merged into the integration ref, upstream gone, not open in
-    /// herdr, not locked, not the main checkout. Preselectable.
+    /// Clean, merged into the integration ref, upstream gone, not protected,
+    /// not open in herdr, not locked, not the main checkout. Preselectable.
     Safe,
     /// Some evidence of death but not all of it. Removable, never preselected.
     Review,
     /// Nothing suggests this is dead. Removable only by explicit selection, and
     /// the table says so.
     Keep,
-    /// Cannot be removed as things stand: locked, open in herdr, or the main
-    /// checkout. The row names the unblocking action.
+    /// Cannot be removed as things stand: protected, locked, open in herdr, or
+    /// the main checkout. The row names the unblocking action.
     Blocked,
 }
 
@@ -294,6 +299,8 @@ pub struct Candidate {
     pub last_commit: Option<SystemTime>,
     /// herdr workspace holding this checkout open, if any.
     pub open_workspace: Option<OpenWorkspace>,
+    /// Protection pattern that matched this checkout, if any.
+    pub protected: Option<String>,
     pub classes: BTreeSet<Class>,
     pub verdict: Verdict,
     pub size: Size,

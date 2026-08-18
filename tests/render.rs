@@ -47,6 +47,7 @@ impl Row {
             merged: Merged::Unknown,
             last_commit: None,
             open_workspace: None,
+            protected: None,
             classes: BTreeSet::new(),
             verdict: Verdict::Keep,
             size: Size::Pending,

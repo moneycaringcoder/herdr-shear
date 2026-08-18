@@ -494,6 +494,7 @@ fn facts_for(inventory: &Inventory, path: &Path) -> Facts {
         merged: candidate.merged,
         last_commit: candidate.last_commit,
         open_workspace: candidate.open_workspace,
+        protected: None,
     }
 }
 
@@ -553,6 +554,7 @@ fn merged_unknown_never_satisfies_safe() {
         merged: Merged::Into("origin/main".into()),
         last_commit: Some(SystemTime::now()),
         open_workspace: None,
+        protected: None,
     };
     let now = SystemTime::now();
 
@@ -609,6 +611,7 @@ fn an_unknown_commit_time_is_not_staleness() {
         merged: Merged::Unknown,
         last_commit: None,
         open_workspace: None,
+        protected: None,
     };
     let candidate = classify::classify(facts, week(2), SystemTime::now());
     assert_row(&candidate, Verdict::Keep, &[]);
@@ -701,6 +704,7 @@ fn dirty_signals_quote_every_kind_of_dirt_in_significance_order() {
             merged: Merged::No("origin/main".into()),
             last_commit: Some(now),
             open_workspace: None,
+            protected: None,
         },
         week(2),
         now,
@@ -715,6 +719,73 @@ fn dirty_signals_quote_every_kind_of_dirt_in_significance_order() {
         signals
             .last()
             .is_some_and(|signal| signal.contains("not clean")),
+        "{signals:?}"
+    );
+}
+
+#[test]
+fn protected_signals_quote_pattern_precede_dirt_and_name_the_unblocking_action() {
+    let now = SystemTime::UNIX_EPOCH + week(100);
+    let candidate = classify::classify(
+        Facts {
+            worktree: bare_worktree(),
+            dirt: Dirt {
+                unstaged: 1,
+                ..Dirt::default()
+            },
+            upstream: Upstream::default(),
+            merged: Merged::No("origin/main".into()),
+            last_commit: Some(now),
+            open_workspace: None,
+            protected: Some("release/*".into()),
+        },
+        week(2),
+        now,
+    );
+
+    let signals = classify::signals(&candidate, now);
+    let protection = signals.first().expect("protected signal");
+    assert!(protection.contains("`release/*`"), "{signals:?}");
+    assert!(
+        protection.contains("edit or remove that pattern in") && protection.contains("to unblock"),
+        "{signals:?}"
+    );
+    assert_eq!(
+        signals.get(1).map(String::as_str),
+        Some("1 unstaged at risk"),
+        "protection precedes dirt: {signals:?}"
+    );
+    assert!(
+        signals.last().is_some_and(|signal| {
+            signal.starts_with("not safe: protected by pattern `release/*`")
+                && signal.contains("edit or remove that pattern in")
+        }),
+        "{signals:?}"
+    );
+}
+
+#[test]
+fn unprotected_signals_do_not_invent_a_protection_reason() {
+    let now = SystemTime::UNIX_EPOCH + week(100);
+    let candidate = classify::classify(
+        Facts {
+            worktree: bare_worktree(),
+            dirt: Dirt::default(),
+            upstream: Upstream::default(),
+            merged: Merged::No("origin/main".into()),
+            last_commit: Some(now),
+            open_workspace: None,
+            protected: None,
+        },
+        week(2),
+        now,
+    );
+
+    let signals = classify::signals(&candidate, now);
+    assert!(
+        signals
+            .iter()
+            .all(|signal| !signal.contains("protected by pattern")),
         "{signals:?}"
     );
 }
@@ -735,6 +806,7 @@ fn an_unknown_merge_signal_says_the_question_was_not_askable() {
             merged: Merged::Unknown,
             last_commit: Some(now),
             open_workspace: None,
+            protected: None,
         },
         week(2),
         now,
@@ -770,6 +842,7 @@ fn no_commit_time_never_produces_a_stale_or_age_signal() {
             merged: Merged::Unknown,
             last_commit: None,
             open_workspace: None,
+            protected: None,
         },
         week(2),
         now,
@@ -799,6 +872,7 @@ fn only_non_safe_verdicts_end_with_the_first_failed_safe_condition() {
         merged: Merged::Into("origin/main".into()),
         last_commit: Some(now),
         open_workspace: None,
+        protected: None,
     };
     let safe = classify::classify(safe_facts.clone(), week(2), now);
     let review = classify::classify(

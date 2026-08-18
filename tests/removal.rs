@@ -92,6 +92,7 @@ fn candidate(path: &Path, repo_root: &Path, branch: Option<&str>, oid: Option<&s
         merged: Merged::Unknown,
         last_commit: None,
         open_workspace: None,
+        protected: None,
         classes: BTreeSet::new(),
         verdict: Verdict::Safe,
         size: Size::Pending,
@@ -181,6 +182,74 @@ fn the_main_checkout_is_refused_and_no_permission_overrides_it() {
     assert!(
         sentence.contains("main checkout") && sentence.contains("no override"),
         "the refusal has to say that asking again will not help: {sentence}"
+    );
+}
+
+#[test]
+fn a_protected_safe_worktree_is_refused_under_every_permission_combination() {
+    let mut candidate = paper_candidate();
+    let pattern = "release-*".to_string();
+    candidate.protected = Some(pattern.clone());
+    candidate.classes.insert(Class::Protected);
+
+    let expected = Err(Refusal::Protected {
+        pattern: pattern.clone(),
+    });
+    assert_eq!(check(&candidate, Permissions::default()), expected);
+    assert_eq!(
+        check(
+            &candidate,
+            Permissions {
+                force_dirty: true,
+                acknowledged_files: Some(0),
+                close_workspace: false,
+            }
+        ),
+        Err(Refusal::Protected {
+            pattern: pattern.clone(),
+        })
+    );
+    assert_eq!(
+        check(
+            &candidate,
+            Permissions {
+                close_workspace: true,
+                ..Permissions::default()
+            }
+        ),
+        Err(Refusal::Protected {
+            pattern: pattern.clone(),
+        })
+    );
+    assert_eq!(
+        check(&candidate, every_permission(0)),
+        Err(Refusal::Protected {
+            pattern: pattern.clone(),
+        }),
+        "no permission combination may widen the protected set"
+    );
+
+    let sentence = Refusal::Protected { pattern }.about(candidate.path());
+    assert!(sentence.contains("release-*"), "{sentence}");
+    assert!(
+        sentence.contains("Edit or remove") && sentence.contains("no flag overrides"),
+        "the refusal names both the unblocking action and the absence of an override: {sentence}"
+    );
+}
+
+#[test]
+fn protection_outranks_dirty_even_when_the_dirt_is_correctly_acknowledged() {
+    let mut candidate = paper_candidate();
+    candidate.protected = Some("/shared/**".into());
+    candidate.classes.insert(Class::Protected);
+    dirty(&mut candidate, 2, 1);
+
+    assert_eq!(
+        check(&candidate, every_permission(3)),
+        Err(Refusal::Protected {
+            pattern: "/shared/**".into(),
+        }),
+        "protection is the refusal shear cannot be talked out of"
     );
 }
 

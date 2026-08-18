@@ -62,6 +62,21 @@ All notable changes to this project are documented here. The format follows
   worktrees are `safe`, and therefore which the review pane's bulk key may
   preselect, is unchanged by any rule, and a test pins that on a real
   repository.
+- A protect list. `protect` in the config file takes patterns, matched against
+  both a checkout's absolute path and its branch name, so "a long-lived release
+  branch" and "a worktree someone else owns" are both expressible. The syntax is
+  deliberately tiny — `*` within a path segment, `**` across them, everything
+  else literal — because a protect list is read in a hurry and a pattern
+  language with corners is a pattern language people get wrong.
+  A protected worktree is `blocked`, and the row says which pattern protected it
+  and which file to edit. It cannot be selected, cannot be preselected, and is
+  refused by every removal path: protection is checked before the lock, the
+  workspace and the dirt guards, and neither `--force-dirty` nor
+  `--close-workspace` nor both together override it. Protected rows stay on
+  screen and are counted, rather than quietly vanishing — a row that disappears
+  is indistinguishable from a scan that missed it, and this is the one setting a
+  user is most likely to get wrong on the first try. An empty pattern is ignored
+  with a warning, since it would silently protect everything.
 
 ## [0.1.0] - 2026-08-16
 

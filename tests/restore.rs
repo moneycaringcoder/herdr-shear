@@ -66,6 +66,7 @@ fn candidate(path: &Path, repo_root: &Path, branch: &str, oid: &str) -> Candidat
         merged: Merged::Unknown,
         last_commit: None,
         open_workspace: None,
+        protected: None,
         classes: BTreeSet::new(),
         verdict: Verdict::Safe,
         size: Size::Bytes(0),
