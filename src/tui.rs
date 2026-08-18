@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::config::Config;
 use crate::model::{Class, Inventory, Size, Verdict};
@@ -495,9 +496,7 @@ fn body_lines(review: &Review, width: usize, budget: usize) -> Vec<String> {
 fn foot_lines(review: &Review, width: usize, budget: usize) -> Vec<String> {
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(vec![String::new()]);
-    if let Some(detail) = detail_line(review) {
-        blocks.push(render::wrap(&detail, width));
-    }
+    blocks.push(detail_block(review, width, usize::MAX).unwrap_or_default());
     blocks.push(vec![selection_line(review)]);
     blocks.push(mode_lines(review, width));
     // The sentence that makes the action feel safe, where it can be read while
@@ -507,10 +506,6 @@ fn foot_lines(review: &Review, width: usize, budget: usize) -> Vec<String> {
         if width >= 72 { HELP_WIDE } else { HELP_NARROW }.to_string()
     ]);
 
-    // Trim from the least useful block up when the pane is short: the help line
-    // first, then the cursor detail, then the selection line. The safety note
-    // and whatever the pane is currently asking always survive.
-    let droppable = [5usize, 1, 2, 0];
     let mut dropped: BTreeSet<usize> = BTreeSet::new();
     let total = |dropped: &BTreeSet<usize>, blocks: &[Vec<String>]| {
         blocks
@@ -520,13 +515,34 @@ fn foot_lines(review: &Review, width: usize, budget: usize) -> Vec<String> {
             .map(|(_, block)| block.len())
             .sum::<usize>()
     };
-    for index in droppable {
+
+    // Trim from the least useful block up when the pane is short. Help yields
+    // first. The detail then gives up whole signals, and finally the entire
+    // block, before selection and the blank separator yield. The safety note
+    // and whatever the pane is currently asking always survive.
+    if total(&dropped, &blocks) > budget {
+        dropped.insert(5);
+    }
+    if total(&dropped, &blocks) > budget {
+        let without_detail = blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != 1 && !dropped.contains(index))
+            .map(|(_, block)| block.len())
+            .sum::<usize>();
+        let detail_budget = budget.saturating_sub(without_detail);
+        match detail_block(review, width, detail_budget) {
+            Some(detail) => blocks[1] = detail,
+            None => {
+                dropped.insert(1);
+            }
+        }
+    }
+    for index in [2usize, 0] {
         if total(&dropped, &blocks) <= budget {
             break;
         }
-        if index < blocks.len() {
-            dropped.insert(index);
-        }
+        dropped.insert(index);
     }
 
     blocks
@@ -537,23 +553,52 @@ fn foot_lines(review: &Review, width: usize, budget: usize) -> Vec<String> {
         .collect()
 }
 
-fn detail_line(review: &Review) -> Option<String> {
+fn detail_block(review: &Review, width: usize, budget: usize) -> Option<Vec<String>> {
     let candidate = review.inventory.candidates.get(review.cursor)?;
     let name = candidate
         .path()
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| candidate.path().to_string_lossy().into_owned());
-    let reason = if candidate.reason.trim().is_empty() {
-        render::classes_cell(candidate, usize::MAX)
-    } else {
-        candidate.reason.clone()
-    };
-    if reason.is_empty() {
-        Some(format!("{name}: {}", candidate.verdict.label()))
-    } else {
-        Some(format!("{name}: {reason}"))
+    let mut lines = render::wrap(&format!("{name}: {}", candidate.verdict.label()), width);
+    if lines.len() > budget {
+        return None;
     }
+
+    let wrapped_signals: Vec<Vec<String>> = crate::classify::signals(candidate, SystemTime::now())
+        .into_iter()
+        .map(|signal| {
+            let mut wrapped = String::new();
+            render::push_wrapped(&mut wrapped, "  ", "  ", &signal, width);
+            wrapped.lines().map(str::to_string).collect()
+        })
+        .collect();
+    let signal_count = wrapped_signals.len();
+    let full_len = lines.len() + wrapped_signals.iter().map(Vec::len).sum::<usize>();
+    if full_len <= budget {
+        lines.extend(wrapped_signals.into_iter().flatten());
+        return Some(lines);
+    }
+
+    // The omission marker needs its own line. If even the naming line plus that
+    // marker cannot fit, the normal footer drop order removes the whole detail
+    // block rather than showing an ambiguous fragment.
+    if lines.len() + 1 > budget {
+        return None;
+    }
+    let signal_budget = budget - lines.len() - 1;
+    let mut used = 0;
+    let mut shown = 0;
+    for wrapped in wrapped_signals {
+        if used + wrapped.len() > signal_budget {
+            break;
+        }
+        used += wrapped.len();
+        shown += 1;
+        lines.extend(wrapped);
+    }
+    lines.push(format!("  +{} more (widen the pane)", signal_count - shown));
+    Some(lines)
 }
 
 fn selection_line(review: &Review) -> String {
