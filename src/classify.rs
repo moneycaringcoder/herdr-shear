@@ -400,8 +400,23 @@ fn locked_phrase(worktree: &Worktree) -> Option<String> {
 }
 
 fn open_workspace_phrase(workspace: &OpenWorkspace) -> String {
+    // Only the two states that change the decision are said. An agent
+    // mid-task or waiting on input makes "close it" a different action from
+    // closing an idle workspace; idle, done and unknown add nothing a user
+    // would act on, and saying them would bury the states that matter.
+    //
+    // This is herdr's own per-workspace aggregation, which ranks `working`
+    // above `blocked` — a workspace with one agent on an approval prompt and
+    // another still working reads as working. Both wordings counsel the same
+    // hesitation, so the coarser figure is accepted rather than re-aggregated
+    // from the snapshot's per-agent array.
+    let doing = match workspace.agent_status {
+        Some(crate::model::AgentStatus::Working) => ", where an agent is still working",
+        Some(crate::model::AgentStatus::Blocked) => ", where an agent is waiting for input",
+        _ => "",
+    };
     format!(
-        "open in the herdr workspace {}; close it to unblock",
+        "open in the herdr workspace {}{doing}; close it to unblock",
         workspace.label
     )
 }

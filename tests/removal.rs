@@ -323,6 +323,7 @@ fn a_lock_outranks_every_other_refusal() {
     candidate.open_workspace = Some(OpenWorkspace {
         workspace_id: "w18".into(),
         label: "live".into(),
+        agent_status: None,
     });
 
     assert_eq!(
@@ -339,6 +340,7 @@ fn a_worktree_open_in_herdr_is_refused_without_permission_to_close_the_workspace
     candidate.open_workspace = Some(OpenWorkspace {
         workspace_id: "w18".into(),
         label: "media-throughput".into(),
+        agent_status: None,
     });
     candidate.classes.insert(Class::OpenInHerdr);
 
@@ -519,6 +521,7 @@ fn the_route_follows_whether_herdr_holds_the_worktree_open() {
     candidate.open_workspace = Some(OpenWorkspace {
         workspace_id: "w18".into(),
         label: "live".into(),
+        agent_status: None,
     });
     assert_eq!(
         route_for(&candidate),
@@ -921,6 +924,7 @@ fn a_worktree_herdr_holds_open_is_refused_when_there_is_no_socket() {
     candidate.open_workspace = Some(OpenWorkspace {
         workspace_id: "w18".into(),
         label: "live".into(),
+        agent_status: None,
     });
     candidate.classes.insert(Class::OpenInHerdr);
 

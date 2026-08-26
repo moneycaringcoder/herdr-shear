@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The open-workspace sentence now says when the workspace's agent is mid-task:
+  "open in the herdr workspace X, where an agent is still working" (or "where
+  an agent is waiting for input"). The sentence is the row's reason, so it
+  reaches the review pane's detail line, the signals, and `--json`'s `reason`.
+  Only those two states are said — idle, done, and unknown add nothing a user
+  would act on. The status comes from the `session.snapshot` shear already
+  reads. `--json`'s `open_workspace` object gains an `agent_status` field —
+  `null` when herdr did not say, or said a state this build does not know —
+  and the upstream canary's contract pins the field.
+
 - A new `occupied` class: a herdr pane whose working directory is inside a
   checkout, when that pane is not one a removal would close — the panes of a
   workspace holding the checkout open are excepted, because herdr's
@@ -26,6 +36,12 @@ All notable changes to this project are documented here. The format follows
   and the upstream canary's contract now pins the `panes` surface too.
 ### Fixed
 
+- Open-workspace rows are now joined to the session snapshot by workspace id
+  rather than by checkout path. A workspace can arrive in the snapshot with no
+  `worktree` key while `worktree.list` reports it holding a checkout open —
+  verified live — and the path join then found nothing, so the row's workspace
+  fell back to its bare id ("workspace w1X" instead of its label) and, now,
+  would also have lost its agent status.
 - `space` in the review pane now refuses a `blocked` row instead of selecting
   it and warning that the removal would be refused. The changelog for 0.1.1
   already said a protected row "cannot be selected"; now that is true, and it

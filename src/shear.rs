@@ -43,6 +43,7 @@ pub fn scan(config: &Config) -> Result<Inventory> {
     let repos = discovery.repos;
     let mut open = discovery.open;
     let panes = discovery.panes;
+    let workspaces = discovery.workspaces;
     if repos.is_empty() {
         inventory.notes.push(
             "no git repositories in scope. Pass --repo <PATH> to scan one explicitly, or open \
@@ -60,15 +61,23 @@ pub fn scan(config: &Config) -> Result<Inventory> {
             match client.open_workspaces(&repo.root) {
                 Ok(pairs) => {
                     for (path, workspace_id) in pairs {
-                        let label = open
-                            .get(&path)
+                        // The snapshot carries what `worktree.list` does not:
+                        // the workspace's label and what its agents are doing.
+                        // Joined by workspace id, because a workspace can
+                        // arrive in the snapshot with no `worktree` key while
+                        // holding this checkout open — verified live — and the
+                        // id is then the only join that still names it.
+                        let summary = workspaces.get(&workspace_id);
+                        let label = summary
                             .map(|w| w.label.clone())
                             .unwrap_or_else(|| workspace_id.clone());
+                        let agent_status = summary.and_then(|w| w.agent_status);
                         open.insert(
                             path,
                             OpenWorkspace {
                                 workspace_id,
                                 label,
+                                agent_status,
                             },
                         );
                     }
@@ -276,11 +285,16 @@ pub fn scan(config: &Config) -> Result<Inventory> {
 }
 
 /// What discovery found: the repositories in scope, the checkouts the session
-/// holds open, and where every pane's processes are sitting.
+/// holds open (keyed by path), where every pane's processes are sitting, and
+/// every workspace's label and agent status (keyed by workspace id) — the
+/// latter carried separately because a workspace can hold a checkout open
+/// while arriving in the snapshot with no `worktree` key, verified live, and
+/// the id is then the only join that still names it.
 struct Discovery {
     repos: Vec<Repo>,
     open: BTreeMap<PathBuf, OpenWorkspace>,
     panes: Vec<herdr::PaneCwd>,
+    workspaces: BTreeMap<String, herdr::WorkspaceSummary>,
 }
 
 /// The repositories in scope, and the checkouts the session holds open.
@@ -307,22 +321,29 @@ fn discover(
             Ok(session) => session,
             Err(err) => {
                 notes.push(format!(
-                    "could not read the herdr session ({err}); workspace names and pane \
-                     occupancy are unavailable, and without --repo only explicitly named \
-                     repositories will be scanned"
+                    "could not read the herdr session ({err}); workspace names, agent \
+                     activity and pane occupancy are unavailable, and without --repo only \
+                     explicitly named repositories will be scanned"
                 ));
                 herdr::SessionView {
                     repos: Vec::new(),
+                    workspaces: Vec::new(),
                     panes: Vec::new(),
                 }
             }
         },
         None => herdr::SessionView {
             repos: Vec::new(),
+            workspaces: Vec::new(),
             panes: Vec::new(),
         },
     };
     let panes = session.panes;
+    let workspaces: BTreeMap<String, herdr::WorkspaceSummary> = session
+        .workspaces
+        .into_iter()
+        .map(|w| (w.workspace_id.clone(), w))
+        .collect();
     let session = session.repos;
     for repo in &session {
         for (path, workspace) in &repo.open {
@@ -334,7 +355,12 @@ fn discover(
         for path in &config.only_repos {
             push_repo_at(path, config, &mut repos, notes);
         }
-        return Ok(Discovery { repos, open, panes });
+        return Ok(Discovery {
+            repos,
+            open,
+            panes,
+            workspaces,
+        });
     }
 
     for repo in session {
@@ -366,7 +392,12 @@ fn discover(
         }
     }
 
-    Ok(Discovery { repos, open, panes })
+    Ok(Discovery {
+        repos,
+        open,
+        panes,
+        workspaces,
+    })
 }
 
 fn push_repo_at(path: &Path, config: &Config, repos: &mut Vec<Repo>, notes: &mut Vec<String>) {
@@ -495,6 +526,10 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
                 "open_workspace": candidate.open_workspace.as_ref().map(|w| json!({
                     "workspace_id": w.workspace_id,
                     "label": w.label,
+                    // `null` means herdr did not say, or said something this
+                    // build does not know; either way it is not `unknown`,
+                    // which is a state herdr reports.
+                    "agent_status": w.agent_status.map(|s| s.label()),
                 })),
                 "occupants": candidate.occupants.iter().map(|o| json!({
                     "pane_id": o.pane_id,

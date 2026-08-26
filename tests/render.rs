@@ -120,6 +120,7 @@ impl Row {
         self.0.open_workspace = Some(OpenWorkspace {
             workspace_id: "ws-1".into(),
             label: label.into(),
+            agent_status: None,
         });
         self
     }

@@ -77,8 +77,9 @@ OBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
         "required": ("workspace_id", "label"),
         # No `worktree` key means the workspace is not a repository — and note
         # that a repository with an unborn HEAD arrives this way too, verified
-        # live, which is why `--repo` exists.
-        "optional": ("worktree",),
+        # live, which is why `--repo` exists. `agent_status` decorates the
+        # open-workspace sentence; shear copes with it absent or unrecognized.
+        "optional": ("worktree", "agent_status"),
     },
     "WorkspaceWorktreeInfo": {
         "required": ("repo_key", "checkout_path"),
