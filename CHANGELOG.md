@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The review pane's first frame now shows last run's disk figure, marked
+  provisional: `~1.2 GB` instead of a dot leader, while the walk re-measures
+  behind the rendering exactly as before. The mark is the point — a
+  provisional figure is a claim about last time, so it renders differently
+  from a measurement, counts in no total (the unknown bucket, like pending),
+  is `null` in machine output, and is replaced the moment the walk answers.
+  Figures are remembered in `sizes.jsonl` next to the undo log, rewritten
+  whole on pane close: entries for checkouts that no longer exist are shed, a
+  corrupt line loses one figure and never the file, and a run that never
+  finished measuring keeps the older figure rather than losing it to a quick
+  open-and-quit. This is the honest remainder of the size-cache idea the
+  0.1.1 roadmap stopped on evidence: nothing can validate a cached size
+  cheaply, so it is drawn as a claim while the walk runs anyway, never trusted
+  in its place.
+
 ## [0.1.1] - 2026-08-18
 
 ### Added

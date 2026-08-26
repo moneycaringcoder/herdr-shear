@@ -368,6 +368,12 @@ pub fn undo_log() -> PathBuf {
     state_dir().join("removed.jsonl")
 }
 
+/// Last measured size per checkout, for the review pane's provisional first
+/// frame. One JSON object per line; rewritten whole, never appended forever.
+pub fn size_cache() -> PathBuf {
+    state_dir().join("sizes.jsonl")
+}
+
 /// An XDG base directory. The variable wins when it is set to an absolute path
 /// — the spec says a relative one must be ignored — otherwise `$HOME/<relative>`.
 fn xdg_dir(variable: &str, relative: &str) -> PathBuf {

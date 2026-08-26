@@ -338,12 +338,16 @@ a total, because that is what makes anyone bother running a janitor in the first
 place. Sizes are the space actually occupied on disk (`st_blocks * 512`, what
 `du` reports), with hardlinks counted once and symlinks never followed.
 
-Three things a size column must not do, and does not:
+Four things a size column must not do, and does not:
 
 - A **failed** measurement renders `?`, never a plausible `0 B`.
 - A **pending** measurement renders a dot leader, because the pane draws before
   the walk finishes and a zero that later becomes 1.2 GB is a lie with a delay.
 - A **missing** checkout renders `-`: a prunable worktree reclaims nothing.
+- A **provisional** figure — last run's measurement, drawn on the first frame
+  while the walk re-measures — renders `~1.2 GB`, counts in no total, and is
+  replaced by the walk. It is a claim about last time, never presented as a
+  measurement.
 
 Totals only add up rows that were actually measured, and the summary says how
 many were not — "2 worktrees could not be measured, so that figure is a floor,

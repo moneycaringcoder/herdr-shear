@@ -49,11 +49,11 @@ directory mtimes miss in-place writes for the same reason, filesystem generation
 counters are absent on ext4 and APFS, and `fanotify`/FSEvents need a process
 alive between two pane opens.
 
-What is left is worth doing but is a smaller, different thing, and should be
-written down as such rather than under this heading: draw the previous figure on
-the first frame, marked provisional and counted in no total, while the walk runs
-anyway. Avoiding the re-walk needs a soundness proof no portable filesystem
-interface can give.
+What is left after that evidence shipped as the smaller, different thing it is:
+the previous run's figure is drawn on the first frame, marked provisional
+(`~1.2 GB`), counted in no total, and replaced while the walk runs anyway.
+Avoiding the re-walk itself stays out: it needs a soundness proof no portable
+filesystem interface can give.
 
 ## Interfaces
 

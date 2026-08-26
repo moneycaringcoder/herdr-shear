@@ -508,7 +508,7 @@ fn a_failed_measurement_never_reads_as_a_plausible_zero() {
 }
 
 #[test]
-fn the_four_size_states_are_four_different_cells() {
+fn the_five_size_states_are_five_different_cells() {
     assert_eq!(size_cell(Size::Pending), "\u{2026}");
     assert_eq!(size_cell(Size::Gone), "-");
     assert_eq!(size_cell(Size::Failed), "?");
@@ -516,6 +516,16 @@ fn the_four_size_states_are_four_different_cells() {
     assert_eq!(size_cell(Size::Bytes(512)), "512 B");
     assert_eq!(size_cell(Size::Bytes(12_288)), "12 kB");
     assert_eq!(size_cell(Size::Bytes(1_310_000_000)), "1.2 GB");
+    // A provisional figure is last run's claim, marked so it can never be
+    // read as a measurement — and it is not the pending leader either, so a
+    // user can tell "measuring, no idea yet" from "measuring, last time it
+    // was about this".
+    assert_eq!(size_cell(Size::Provisional(1_310_000_000)), "~1.2 GB");
+    assert_ne!(
+        size_cell(Size::Provisional(0)),
+        size_cell(Size::Bytes(0)),
+        "a claim and a measurement must never render alike"
+    );
 }
 
 #[test]

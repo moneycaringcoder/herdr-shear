@@ -228,6 +228,10 @@ pub enum Size {
     /// Not measured yet.
     #[default]
     Pending,
+    /// The figure from a previous run, drawn while the walk re-measures. It
+    /// might be wrong, so it renders marked, counts in no total, and is
+    /// replaced by the walk — never trusted, only shown.
+    Provisional(u64),
     /// Bytes actually occupied on disk (`st_blocks * 512` on unix), with
     /// hardlinks counted once.
     Bytes(u64),

@@ -76,7 +76,7 @@ fn project(inventory: &Inventory, generated_at: SystemTime) -> serde_json::Value
                         }
                     }
                     Size::Gone => {}
-                    Size::Pending | Size::Failed => {
+                    Size::Pending | Size::Provisional(_) | Size::Failed => {
                         total_unmeasured += 1;
                         if candidate.verdict == Verdict::Safe {
                             reclaimable_unmeasured += 1;
@@ -144,6 +144,7 @@ fn measured_bytes(size: Size) -> Option<u64> {
     match size {
         Size::Bytes(bytes) => Some(bytes),
         Size::Gone => Some(0),
-        Size::Pending | Size::Failed => None,
+        // A provisional figure is last run's claim, never a measurement.
+        Size::Pending | Size::Provisional(_) | Size::Failed => None,
     }
 }

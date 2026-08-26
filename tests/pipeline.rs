@@ -311,3 +311,107 @@ fn a_user_supplied_path_resolves_through_a_symlink_and_a_trailing_dot() {
         "an unknown path must not resolve to something"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The size cache: last run's figures, provisional next time
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_measured_size_comes_back_provisional_and_the_walk_still_replaces_it() {
+    let _guard = env_lock();
+    no_herdr();
+
+    let fixture = Fixture::new("size-cache");
+    let worktree = fixture.active_worktree("cached");
+    let cache = fixture.root().join("sizes.jsonl");
+
+    // First run: measure and remember.
+    let mut inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+    disk::measure_all(&mut inventory, &AtomicBool::new(false));
+    let Size::Bytes(measured) = inventory.find(&worktree).expect("row").size else {
+        panic!("the walk must have measured the worktree");
+    };
+    disk::remember(&inventory, &cache);
+
+    // Second run: the remembered figure arrives provisional on pending rows,
+    // marked as a claim rather than a measurement, and rows the cache does not
+    // know stay pending.
+    let mut second = pipeline::scan(&config_for(&fixture.repo)).expect("rescan");
+    let unknown = fixture.active_worktree("uncached");
+    let mut third = pipeline::scan(&config_for(&fixture.repo)).expect("third scan");
+    disk::recall(&mut third, &cache);
+    assert_eq!(
+        third.find(&worktree).expect("row").size,
+        Size::Provisional(measured)
+    );
+    assert_eq!(third.find(&unknown).expect("new row").size, Size::Pending);
+
+    // The walk still runs and replaces the claim with a measurement.
+    disk::measure_all(&mut third, &AtomicBool::new(false));
+    assert!(matches!(
+        third.find(&worktree).expect("row").size,
+        Size::Bytes(_)
+    ));
+
+    // And a provisional figure counts in no total: it goes to the unknown
+    // bucket, exactly like pending.
+    disk::recall(&mut second, &cache);
+    let provisional_row = second.find(&worktree).expect("row");
+    let (bytes, unknown_count) = pipeline::reclaimable(std::iter::once(provisional_row));
+    assert_eq!(bytes, 0);
+    assert_eq!(unknown_count, 1);
+}
+
+#[test]
+fn the_cache_survives_corruption_and_sheds_paths_that_are_gone() {
+    let _guard = env_lock();
+    no_herdr();
+
+    let fixture = Fixture::new("size-cache-hygiene");
+    let kept = fixture.active_worktree("kept");
+    let doomed = fixture.active_worktree("doomed");
+    let cache = fixture.root().join("sizes.jsonl");
+
+    let mut inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+    disk::measure_all(&mut inventory, &AtomicBool::new(false));
+    disk::remember(&inventory, &cache);
+
+    // A corrupt line loses one figure, never the file.
+    let mut raw = std::fs::read_to_string(&cache).expect("read the cache");
+    raw.insert_str(0, "not json at all\n");
+    std::fs::write(&cache, raw).expect("corrupt the cache");
+    let mut recalled = pipeline::scan(&config_for(&fixture.repo)).expect("rescan");
+    disk::recall(&mut recalled, &cache);
+    assert!(matches!(
+        recalled.find(&kept).expect("kept").size,
+        Size::Provisional(_)
+    ));
+
+    // A remembered path that no longer exists on disk is dropped on the next
+    // write, which is what keeps the file from growing forever.
+    fixture.git(
+        &fixture.repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            doomed.to_str().expect("utf-8 fixture path"),
+        ],
+    );
+    let mut after = pipeline::scan(&config_for(&fixture.repo)).expect("scan after removal");
+    disk::measure_all(&mut after, &AtomicBool::new(false));
+    disk::remember(&after, &cache);
+    let written = std::fs::read_to_string(&cache).expect("read the cache back");
+    assert!(
+        written.contains(kept.to_str().expect("utf-8")),
+        "the surviving checkout keeps its figure: {written}"
+    );
+    assert!(
+        !written.contains(doomed.to_str().expect("utf-8")),
+        "the removed checkout is shed: {written}"
+    );
+    assert!(
+        !written.contains("not json"),
+        "the corrupt line is not carried forward: {written}"
+    );
+}
