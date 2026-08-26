@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The open-workspace sentence now says when the workspace's agent is mid-task:
+  "open in the herdr workspace X, where an agent is still working" (or "where
+  an agent is waiting for input"). The sentence is the row's reason, so it
+  reaches the review pane's detail line, the signals, and `--json`'s `reason`.
+  Only those two states are said — idle, done, and unknown add nothing a user
+  would act on. The status comes from the `session.snapshot` shear already
+  reads. `--json`'s `open_workspace` object gains an `agent_status` field,
+  `null` when herdr did not say, and the upstream canary's contract pins the
+  field.
+
+### Fixed
+
+- Open-workspace rows are now joined to the session snapshot by workspace id
+  rather than by checkout path. A workspace can arrive in the snapshot with no
+  `worktree` key while `worktree.list` reports it holding a checkout open —
+  verified live — and the path join then found nothing, so the row's workspace
+  fell back to its bare id ("workspace w1X" instead of its label) and, now,
+  would also have lost its agent status.
+
 ## [0.1.1] - 2026-08-18
 
 ### Added

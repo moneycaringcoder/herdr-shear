@@ -83,6 +83,28 @@ pub struct SessionRepo {
     pub open: Vec<(PathBuf, OpenWorkspace)>,
 }
 
+/// What one `session.snapshot` says: the repositories the session knows about,
+/// and every workspace's label and agent status — including workspaces that
+/// arrive with no `worktree` key, which still hold checkouts open that
+/// `worktree.list` can see. Read in one call because both come from the same
+/// snapshot, and asking twice could describe two different sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionView {
+    pub repos: Vec<SessionRepo>,
+    pub workspaces: Vec<WorkspaceSummary>,
+}
+
+/// One workspace's identity, from `session.snapshot.workspaces`. Carried for
+/// every workspace, repo or not: a workspace herdr reports with no `worktree`
+/// key can still hold a checkout open — verified live — and joining by
+/// workspace id is what still names it then.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSummary {
+    pub workspace_id: String,
+    pub label: String,
+    pub agent_status: Option<crate::model::AgentStatus>,
+}
+
 /// Result of `worktree.remove`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Removed {
@@ -103,14 +125,17 @@ impl Herdr {
         })
     }
 
-    /// The repositories the session knows about, reduced from one
-    /// `session.snapshot`.
+    /// The repositories the session knows about and every workspace's label
+    /// and agent status, reduced from one `session.snapshot`.
     ///
-    /// Workspaces with no `worktree` key are not repos and are skipped: that is
-    /// data, not an error. Note that a workspace whose repository has an
-    /// **unborn HEAD** also arrives with no `worktree` key — verified live — so
-    /// a brand-new repo is invisible here and has to be reached with `--repo`.
-    pub fn session_repos(&mut self) -> Result<Vec<SessionRepo>> {
+    /// Workspaces with no `worktree` key are not repos and are skipped from
+    /// `repos` — that is data, not an error — but they still appear in
+    /// `workspaces`: verified live, a workspace can arrive with no `worktree`
+    /// key while `worktree.list` reports it holding a checkout open. A
+    /// repository with an **unborn HEAD** also arrives with no `worktree` key,
+    /// so a brand-new repo is invisible in `repos` and has to be reached with
+    /// `--repo`.
+    pub fn session_view(&mut self) -> Result<SessionView> {
         let result = self.call("session.snapshot", json!({}))?;
         // The payload is `{"type":"session_snapshot","snapshot":{...}}`; the
         // arrays live one level down, under `snapshot`. Reading them off the
@@ -123,7 +148,10 @@ impl Herdr {
                 text(&result, "type").unwrap_or("missing")
             )
         })?;
-        Ok(reduce_snapshot(snapshot))
+        Ok(SessionView {
+            repos: reduce_snapshot(snapshot),
+            workspaces: workspace_summaries(snapshot),
+        })
     }
 
     /// herdr's own view of one repository's worktrees, used **only** for
@@ -369,6 +397,8 @@ fn reduce_snapshot(snapshot: &Value) -> Vec<SessionRepo> {
         let open = OpenWorkspace {
             workspace_id: workspace_id.to_string(),
             label: text(workspace, "label").unwrap_or(workspace_id).to_string(),
+            agent_status: text(workspace, "agent_status")
+                .and_then(crate::model::AgentStatus::parse),
         };
 
         let key = RepoKey(repo_key.to_string());
@@ -384,4 +414,21 @@ fn reduce_snapshot(snapshot: &Value) -> Vec<SessionRepo> {
     }
 
     repos
+}
+
+/// Every workspace's label and agent status from a `session.snapshot`,
+/// including the ones with no `worktree` key.
+fn workspace_summaries(snapshot: &Value) -> Vec<WorkspaceSummary> {
+    array(snapshot, "workspaces")
+        .iter()
+        .filter_map(|workspace| {
+            let workspace_id = text(workspace, "workspace_id")?;
+            Some(WorkspaceSummary {
+                workspace_id: workspace_id.to_string(),
+                label: text(workspace, "label").unwrap_or(workspace_id).to_string(),
+                agent_status: text(workspace, "agent_status")
+                    .and_then(crate::model::AgentStatus::parse),
+            })
+        })
+        .collect()
 }

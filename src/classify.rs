@@ -376,8 +376,17 @@ fn locked_phrase(worktree: &Worktree) -> Option<String> {
 }
 
 fn open_workspace_phrase(workspace: &OpenWorkspace) -> String {
+    // Only the two states that change the decision are said. An agent
+    // mid-task or waiting on input makes "close it" a different action from
+    // closing an idle workspace; idle, done and unknown add nothing a user
+    // would act on, and saying them would bury the states that matter.
+    let doing = match workspace.agent_status {
+        Some(crate::model::AgentStatus::Working) => ", where an agent is still working",
+        Some(crate::model::AgentStatus::Blocked) => ", where an agent is waiting for input",
+        _ => "",
+    };
     format!(
-        "open in the herdr workspace {}; close it to unblock",
+        "open in the herdr workspace {}{doing}; close it to unblock",
         workspace.label
     )
 }

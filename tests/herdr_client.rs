@@ -18,6 +18,7 @@ use std::thread::JoinHandle;
 
 use serde_json::{json, Value};
 use shear::herdr::{self, Herdr};
+use shear::model::AgentStatus;
 
 // ---------------------------------------------------------------------------
 // A real server, one request per connection
@@ -233,14 +234,15 @@ fn assert_wire(raw: &str, method: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn session_repos_reads_the_arrays_from_result_snapshot() {
+fn session_view_reads_the_arrays_from_result_snapshot() {
     let server = Server::new(
         "snapshot",
         vec![Some(line(&capture("session-snapshot.json")))],
     );
     let (_guard, mut client) = server.client();
 
-    let repos = client.session_repos().expect("read the session");
+    let view = client.session_view().expect("read the session");
+    let repos = view.repos;
 
     let request = assert_wire(&server.requests()[0], "session.snapshot");
     assert_eq!(
@@ -277,6 +279,24 @@ fn session_repos_reads_the_arrays_from_result_snapshot() {
         "every checkout the session holds open, grouped under one repo"
     );
     assert_eq!(crescendo.open[1].1.label, "media-throughput");
+
+    // The agent status rides along: w6's agent is working, wE's is idle, and
+    // herdr-collide's own `unknown` is a reported state, not an absence.
+    assert_eq!(crescendo.open[0].1.agent_status, Some(AgentStatus::Working));
+    assert_eq!(crescendo.open[1].1.agent_status, Some(AgentStatus::Idle));
+    assert_eq!(repos[1].open[0].1.agent_status, Some(AgentStatus::Unknown));
+
+    // Every workspace appears in the summaries, including the four with no
+    // `worktree` key — a workspace can hold a checkout open while arriving
+    // that way, and the id join is what still names it then.
+    assert_eq!(view.workspaces.len(), 8, "every workspace in the capture");
+    let shear = view
+        .workspaces
+        .iter()
+        .find(|w| w.workspace_id == "w15")
+        .expect("w15 has no worktree key and must still be summarized");
+    assert_eq!(shear.label, "shear");
+    assert_eq!(shear.agent_status, Some(AgentStatus::Working));
 }
 
 #[test]
@@ -298,7 +318,7 @@ fn a_reply_with_no_snapshot_key_is_a_loud_error_and_not_an_empty_session() {
     let (_guard, mut client) = server.client();
 
     let err = client
-        .session_repos()
+        .session_view()
         .expect_err("a missing `snapshot` key must be an error, not an empty session");
     let message = err.to_string();
     assert!(
@@ -340,7 +360,7 @@ fn a_checkout_path_ending_in_a_dot_still_joins_against_gits_absolute_path() {
 
     let server = Server::new("snapshot-dot", vec![Some(line(&captured))]);
     let (_guard, mut client) = server.client();
-    let repos = client.session_repos().expect("read the session");
+    let repos = client.session_view().expect("read the session").repos;
 
     let collide = repos
         .iter()

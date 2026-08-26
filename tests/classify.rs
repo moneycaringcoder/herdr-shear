@@ -22,8 +22,8 @@ use shear::classify::{self, Facts};
 use shear::config::Config;
 use shear::git;
 use shear::model::{
-    Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, PrunableInfo,
-    RepoKey, Upstream, Verdict, Worktree,
+    AgentStatus, Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace,
+    PrunableInfo, RepoKey, Upstream, Verdict, Worktree,
 };
 
 use fixtures::{pin_git_env, Fixture};
@@ -515,6 +515,7 @@ fn a_worktree_open_in_a_herdr_workspace_is_blocked() {
     facts.open_workspace = Some(OpenWorkspace {
         workspace_id: "ws-7".into(),
         label: "review pane".into(),
+        agent_status: None,
     });
     let candidate = classify::classify(facts, week(2), SystemTime::now());
 
@@ -535,6 +536,42 @@ fn a_worktree_open_in_a_herdr_workspace_is_blocked() {
         }),
         "{signals:?}"
     );
+}
+
+/// The open-workspace sentence says what the workspace's agents are doing, but
+/// only when that changes the decision: working and blocked are said, and
+/// everything else reads exactly as before.
+#[test]
+fn the_open_workspace_reason_says_when_an_agent_is_mid_task() {
+    let sink = kitchen_sink("open-agent-status");
+    let base = facts_for(&sink.inventory, &sink.safe);
+    let with = |status: Option<AgentStatus>| {
+        let mut facts = base.clone();
+        facts.open_workspace = Some(OpenWorkspace {
+            workspace_id: "ws-7".into(),
+            label: "review pane".into(),
+            agent_status: status,
+        });
+        classify::classify(facts, week(2), SystemTime::now()).reason
+    };
+
+    assert_eq!(
+        with(Some(AgentStatus::Working)),
+        "open in the herdr workspace review pane, where an agent is still working; \
+         close it to unblock"
+    );
+    assert_eq!(
+        with(Some(AgentStatus::Blocked)),
+        "open in the herdr workspace review pane, where an agent is waiting for input; \
+         close it to unblock"
+    );
+    // Idle, done, unknown and unreported all read exactly as before: they add
+    // nothing a user would act on.
+    let plain = "open in the herdr workspace review pane; close it to unblock";
+    assert_eq!(with(Some(AgentStatus::Idle)), plain);
+    assert_eq!(with(Some(AgentStatus::Done)), plain);
+    assert_eq!(with(Some(AgentStatus::Unknown)), plain);
+    assert_eq!(with(None), plain);
 }
 
 /// The three merged states, pinned side by side. `Unknown` is the one that
