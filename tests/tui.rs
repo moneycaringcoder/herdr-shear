@@ -266,6 +266,32 @@ fn the_main_checkout_can_never_be_selected() {
 }
 
 #[test]
+fn a_blocked_row_can_never_be_selected() {
+    // Any blocked row, not only the main checkout: the pane never grants the
+    // permissions that could remove one, so a selection could only end in a
+    // refusal at removal time.
+    let mut state = review();
+    state.inventory.candidates[DIRTY_REVIEW] =
+        Row::new("/home/dev/repos/app-wt/hotfix-payments", "hotfix/payments")
+            .verdict(Verdict::Blocked)
+            .classes(&[Class::Locked])
+            .locked()
+            .reason("locked (benchmark rig): unlock it with `git worktree unlock`")
+            .build();
+    state.cursor = DIRTY_REVIEW;
+    let after = drive(state, &[Key::Toggle]);
+    assert!(after.selected.is_empty());
+    assert!(
+        after
+            .messages
+            .iter()
+            .any(|m| m.contains("cannot be selected") && m.contains("unlock")),
+        "the refusal names the unblocking action: {:?}",
+        after.messages
+    );
+}
+
+#[test]
 fn space_toggles_and_n_clears() {
     let after = drive(review(), &[Key::Down, Key::Toggle]);
     assert_eq!(selection(&after), BTreeSet::from([SAFE_A]));

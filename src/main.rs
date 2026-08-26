@@ -34,7 +34,8 @@ Options:
                       scans every repository the herdr session knows about.
   --integration-ref <REF>
                       Ref a branch must be contained in to count as merged
-                      (default: origin/HEAD, then origin/main, main, master)
+                      (default: origin/HEAD, then origin/main, origin/master,
+                      main, master)
   --stale-days <N>    Age past which a clean branch is called stale (default 14)
   --no-size           Skip disk measurement; every size reads `-`
   --version           Print version and exit

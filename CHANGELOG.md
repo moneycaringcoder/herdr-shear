@@ -26,6 +26,15 @@ All notable changes to this project are documented here. The format follows
   verified live — and the path join then found nothing, so the row's workspace
   fell back to its bare id ("workspace w1X" instead of its label) and, now,
   would also have lost its agent status.
+- `space` in the review pane now refuses a `blocked` row instead of selecting
+  it and warning that the removal would be refused. The changelog for 0.1.1
+  already said a protected row "cannot be selected"; now that is true, and it
+  is true for every blocked row — locked, open in herdr, or protected — because
+  the pane never grants the permissions that could remove one. The refusal
+  message names the unblocking action, at the keypress rather than at removal
+  time.
+- The CLI help now lists `origin/master` in the integration-ref guess order,
+  between `origin/main` and `main`, matching what the code has always tried.
 
 ## [0.1.1] - 2026-08-18
 
