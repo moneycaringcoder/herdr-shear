@@ -227,16 +227,26 @@ fn browsing(mut review: Review, key: Key) -> Review {
                 );
                 return review;
             }
-            let blocked = candidate.verdict == Verdict::Blocked;
-            let reason = candidate.reason.clone();
-            if review.selected.remove(&review.cursor) {
+            // A blocked row can never be removed from this pane — the pane
+            // never grants `close_workspace`, and protection and locks have no
+            // override at all — so selecting one could only end in a refusal
+            // at removal time. Refuse at the keypress instead, when the reason
+            // can still name the unblocking action next to the row it is about.
+            //
+            // Unlike `preselectable`, this gates on the verdict alone: `a` is
+            // a bulk key acting on rows the user never looked at, so it
+            // re-checks the blocking facts against a classifier gone wrong;
+            // `space` is an explicit per-row choice, and the removal path
+            // re-checks every fact regardless.
+            if candidate.verdict == Verdict::Blocked {
+                review.messages.push(format!(
+                    "Blocked, so it cannot be selected: {}",
+                    candidate.reason
+                ));
                 return review;
             }
-            review.selected.insert(review.cursor);
-            if blocked {
-                review.messages.push(format!(
-                    "Selected, but it is blocked and the removal will be refused: {reason}"
-                ));
+            if !review.selected.remove(&review.cursor) {
+                review.selected.insert(review.cursor);
             }
         }
         Key::SelectSafe => {

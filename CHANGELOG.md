@@ -18,6 +18,17 @@ All notable changes to this project are documented here. The format follows
   pane removes something the user did not mean. A rescan that fails leaves the
   pane exactly as it was, still showing the previous scan, and says so. Disk
   sizes are re-measured behind the rendering, exactly as on open.
+### Fixed
+
+- `space` in the review pane now refuses a `blocked` row instead of selecting
+  it and warning that the removal would be refused. The changelog for 0.1.1
+  already said a protected row "cannot be selected"; now that is true, and it
+  is true for every blocked row — locked, open in herdr, or protected — because
+  the pane never grants the permissions that could remove one. The refusal
+  message names the unblocking action, at the keypress rather than at removal
+  time.
+- The CLI help now lists `origin/master` in the integration-ref guess order,
+  between `origin/main` and `main`, matching what the code has always tried.
 
 ## [0.1.1] - 2026-08-18
 
