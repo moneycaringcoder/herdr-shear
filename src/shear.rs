@@ -538,12 +538,15 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
                 "bytes": match candidate.size {
                     Size::Bytes(bytes) => json!(bytes),
                     Size::Gone => json!(0),
-                    Size::Pending | Size::Failed => serde_json::Value::Null,
+                    // A provisional figure is last run's claim, never a
+                    // measurement; a script must not treat it as one.
+                    Size::Pending | Size::Provisional(_) | Size::Failed => serde_json::Value::Null,
                 },
                 "size_state": match candidate.size {
                     Size::Bytes(_) => "measured",
                     Size::Gone => "gone",
                     Size::Pending => "pending",
+                    Size::Provisional(_) => "provisional",
                     Size::Failed => "failed",
                 },
                 "notes": candidate.worktree.notes,
@@ -565,7 +568,11 @@ pub fn reclaimable<'a>(
         match candidate.size {
             crate::model::Size::Bytes(n) => bytes = bytes.saturating_add(n),
             crate::model::Size::Gone => {}
-            crate::model::Size::Pending | crate::model::Size::Failed => unknown += 1,
+            // Counted as unknown, never as its figure: provisional is a claim
+            // about last time, and this total is what a confirmation shows.
+            crate::model::Size::Pending
+            | crate::model::Size::Provisional(_)
+            | crate::model::Size::Failed => unknown += 1,
         }
     }
     (bytes, unknown)

@@ -953,7 +953,8 @@ fn record_for(candidate: &Candidate, route: RemovalRoute) -> RemovalRecord {
         bytes_reclaimed: match candidate.size {
             Size::Bytes(bytes) => Some(bytes),
             Size::Gone => Some(0),
-            Size::Pending | Size::Failed => None,
+            // A provisional figure is last run's claim, never a measurement.
+            Size::Pending | Size::Provisional(_) | Size::Failed => None,
         },
         restore_command: restore_command(candidate),
     }

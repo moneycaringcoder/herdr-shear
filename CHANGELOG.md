@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The review pane's first frame now shows last run's disk figure, marked
+  provisional: `~1.2 GB` instead of a dot leader, while the walk re-measures
+  behind the rendering exactly as before. The mark is the point — a
+  provisional figure is a claim about last time, so it renders differently
+  from a measurement, counts in no total (the unknown bucket, like pending),
+  is `null` in machine output, and is replaced the moment the walk answers.
+  Figures are remembered in `sizes.jsonl` next to the undo log, rewritten
+  whole on pane close: entries for checkouts that no longer exist are shed, a
+  corrupt line loses one figure and never the file, and a run that never
+  finished measuring keeps the older figure rather than losing it to a quick
+  open-and-quit. This is the honest remainder of the size-cache idea the
+  0.1.1 roadmap stopped on evidence: nothing can validate a cached size
+  cheaply, so it is drawn as a claim while the walk runs anyway, never trusted
+  in its place.
+
 - `R` in the review pane rescans: git and herdr are re-read without touching
   anything, for the moment a fetch, a merge, or a branch deletion elsewhere
   changes the answer mid-review. Quitting and reopening the pane was the only
@@ -45,6 +60,7 @@ All notable changes to this project are documented here. The format follows
   workspaces are already invisible then — and the scan's note now says so.
   `--json` rows gain an `occupants` array naming each pane and its directory,
   and the upstream canary's contract now pins the `panes` surface too.
+
 ### Fixed
 
 - Open-workspace rows are now joined to the session snapshot by workspace id

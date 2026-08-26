@@ -157,8 +157,108 @@ pub fn measure_all(inventory: &mut Inventory, cancel: &AtomicBool) {
     }
 }
 
-/// Human-readable size for the table: `1.2 GB`, `340 MB`, `12 kB`, `-` for a
-/// path that is gone, `…` while pending, `?` when the walk failed.
+// ---------------------------------------------------------------------------
+// The size cache: last run's figures, for the provisional first frame
+// ---------------------------------------------------------------------------
+
+/// One remembered measurement. `at` is unix seconds, recorded so a future
+/// reader can weigh how old a figure is; nothing renders it today.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Remembered {
+    path: PathBuf,
+    bytes: u64,
+    at: u64,
+}
+
+/// Marks every pending row whose path has a remembered figure as
+/// [`Size::Provisional`]. The walk still runs for those rows — a provisional
+/// figure is drawn, never trusted — and rows the cache does not know stay
+/// `Pending`. A cache that cannot be read is an absent cache, not an error:
+/// the pane simply opens the way it always has.
+pub fn recall(inventory: &mut Inventory, cache: &Path) {
+    let Ok(raw) = std::fs::read_to_string(cache) else {
+        return;
+    };
+    for line in raw.lines() {
+        let Ok(entry) = serde_json::from_str::<Remembered>(line) else {
+            // A corrupt line loses one figure, never the file.
+            continue;
+        };
+        for candidate in inventory.candidates.iter_mut() {
+            if candidate.size == Size::Pending && candidate.worktree.path == entry.path {
+                candidate.size = Size::Provisional(entry.bytes);
+            }
+        }
+    }
+}
+
+/// Writes what this run measured, merged with remembered figures for paths it
+/// did not measure — checkouts another `--repo` scans, and rows whose walk
+/// never finished, which must not lose their figure to a quick open-and-quit.
+/// An entry whose path no longer exists is dropped, which is what keeps the
+/// file from growing forever. Written whole and atomically; a failure to write
+/// costs the next run its provisional figures and nothing else, so it is not
+/// an error.
+pub fn remember(inventory: &Inventory, cache: &Path) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut entries: Vec<Remembered> = Vec::new();
+    for candidate in &inventory.candidates {
+        if let Size::Bytes(bytes) = candidate.size {
+            entries.push(Remembered {
+                path: candidate.worktree.path.clone(),
+                bytes,
+                at: now,
+            });
+        }
+    }
+
+    if let Ok(raw) = std::fs::read_to_string(cache) {
+        for line in raw.lines() {
+            let Ok(entry) = serde_json::from_str::<Remembered>(line) else {
+                continue;
+            };
+            let measured_this_run = inventory.candidates.iter().any(|candidate| {
+                matches!(candidate.size, Size::Bytes(_)) && candidate.worktree.path == entry.path
+            });
+            // `symlink_metadata`, not `exists`: a checkout behind a dead
+            // symlink still occupies whatever it occupies.
+            if !measured_this_run && std::fs::symlink_metadata(&entry.path).is_ok() {
+                entries.push(entry);
+            }
+        }
+    }
+
+    let mut body = String::new();
+    for entry in &entries {
+        let Ok(line) = serde_json::to_string(entry) else {
+            continue;
+        };
+        body.push_str(&line);
+        body.push('\n');
+    }
+
+    if let Some(parent) = cache.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Atomic, and per-process: a pane torn down mid-write must not leave half
+    // a file for the next open to trip over, and two panes closing at once
+    // must not share a scratch file — a shared one lets pane B's truncation be
+    // published by pane A's rename, which is an emptied cache rather than the
+    // last-writer-wins this is content with.
+    let tmp = cache.with_extension(format!("jsonl.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, cache).is_err() {
+        // A failed rename must not strand scratch files in the state dir.
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Human-readable size for the table: `1.2 GB`, `340 MB`, `12 kB`, `~1.2 GB`
+/// for a previous run's figure while the walk re-measures, `-` for a path that
+/// is gone, `…` while pending, `?` when the walk failed.
 ///
 /// Units are powers of 1024 with SI-style suffixes, matching what `du -h`
 /// prints, because that is the command a user will check this against.
@@ -168,6 +268,8 @@ pub fn human(size: Size) -> String {
     let bytes = match size {
         Size::Bytes(bytes) => bytes,
         Size::Gone => return "-".to_string(),
+        // Marked, because it is a claim about last time: the walk replaces it.
+        Size::Provisional(bytes) => return format!("~{}", human(Size::Bytes(bytes))),
         Size::Pending => return "…".to_string(),
         Size::Failed => return "?".to_string(),
     };
@@ -260,5 +362,19 @@ mod tests {
         assert_eq!(human(Size::Failed), "?");
         assert_ne!(human(Size::Gone), human(Size::Bytes(0)));
         assert_ne!(human(Size::Failed), human(Size::Bytes(0)));
+    }
+
+    /// A provisional figure is marked, and marked the same at every scale: it
+    /// is last run's claim, and the tilde is what keeps it from being read as
+    /// a measurement.
+    #[test]
+    fn a_provisional_figure_is_marked() {
+        assert_eq!(human(Size::Provisional(340 * 1024 * 1024)), "~340 MB");
+        assert_eq!(human(Size::Provisional(0)), "~0 B");
+        assert_ne!(
+            human(Size::Provisional(1024)),
+            human(Size::Bytes(1024)),
+            "a claim and a measurement must never render alike"
+        );
     }
 }

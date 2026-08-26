@@ -347,15 +347,17 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
     if total_unknown > 0 {
         let unmeasured = if safe_unknown > 0 && safe_rows > 0 {
             format!(
-                "{} could not be measured ({} of them safe), so both figures are floors, not \
+                "{} {} not measured ({} of them safe), so both figures are floors, not \
                  estimates.",
                 plural(total_unknown, "worktree", "worktrees"),
+                if total_unknown == 1 { "is" } else { "are" },
                 safe_unknown,
             )
         } else {
             format!(
-                "{} could not be measured, so that figure is a floor, not an estimate.",
+                "{} {} not measured, so that figure is a floor, not an estimate.",
                 plural(total_unknown, "worktree", "worktrees"),
+                if total_unknown == 1 { "is" } else { "are" },
             )
         };
         push_wrapped(&mut out, "", "", &unmeasured, width);
@@ -542,6 +544,9 @@ fn age_cell(candidate: &Candidate) -> String {
 pub fn size_cell(size: Size) -> String {
     match size {
         Size::Pending => DOT_LEADER.to_string(),
+        // Marked with a tilde: last run's figure, drawn while the walk
+        // re-measures, and never presented as a measurement.
+        Size::Provisional(bytes) => format!("~{}", human_bytes(bytes)),
         Size::Gone => "-".to_string(),
         Size::Failed => "?".to_string(),
         Size::Bytes(bytes) => human_bytes(bytes),

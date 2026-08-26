@@ -810,7 +810,13 @@ pub fn for_raw_terminal(frame: &str) -> String {
 
 /// `--review`: the interactive verb.
 pub fn run_review(config: &Config) -> Result<()> {
-    let inventory = crate::shear::scan(config)?;
+    let mut inventory = crate::shear::scan(config)?;
+    // Last run's figures, drawn provisionally on the first frame while the
+    // walk re-measures. Skipped when measurement is off: a pane that will
+    // never replace the figure must not show one.
+    if config.measure_disk {
+        crate::disk::recall(&mut inventory, &crate::config::size_cache());
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
     register_stop_signals(&stop)?;
@@ -828,6 +834,14 @@ pub fn run_review(config: &Config) -> Result<()> {
     let _ = out.flush();
     drop(guard);
 
+    // What this run measured, for the next first frame. Written after the
+    // terminal is restored: a slow disk must not sit between the user and
+    // their prompt.
+    if config.measure_disk {
+        if let Ok(review) = result.as_ref() {
+            crate::disk::remember(&review.inventory, &crate::config::size_cache());
+        }
+    }
     let review = result?;
     // Printed after the terminal is back the way we found it, so the outcome
     // survives the pane closing.
@@ -1073,7 +1087,9 @@ impl Sizer {
         let paths: Vec<PathBuf> = inventory
             .candidates
             .iter()
-            .filter(|candidate| candidate.size == Size::Pending)
+            // Provisional rows are re-measured too: the figure on screen is
+            // last run's, drawn while the walk replaces it.
+            .filter(|candidate| matches!(candidate.size, Size::Pending | Size::Provisional(_)))
             .map(|candidate| candidate.worktree.path.clone())
             .collect();
         if paths.is_empty() {
