@@ -172,8 +172,10 @@ pub fn preselectable(candidate: &crate::model::Candidate) -> bool {
         && !candidate.is(Class::Dirty)
         && !candidate.is(Class::Locked)
         && !candidate.is(Class::OpenInHerdr)
+        && !candidate.is(Class::Occupied)
         && candidate.worktree.locked.is_none()
         && candidate.open_workspace.is_none()
+        && candidate.occupants.is_empty()
         && !candidate.dirt.is_dirty()
 }
 

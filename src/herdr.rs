@@ -83,6 +83,34 @@ pub struct SessionRepo {
     pub open: Vec<(PathBuf, OpenWorkspace)>,
 }
 
+/// What one `session.snapshot` says: the repositories the session knows about,
+/// and where every pane's processes are sitting. Read in one call because both
+/// come from the same snapshot, and asking twice could describe two different
+/// sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionView {
+    pub repos: Vec<SessionRepo>,
+    pub panes: Vec<PaneCwd>,
+}
+
+/// One pane's working directories, from `session.snapshot.panes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneCwd {
+    /// The pane's id, or a placeholder when herdr reported none. A pane with a
+    /// usable cwd but no id still occupies: dropping it would widen what can be
+    /// removed for a reporting gap.
+    pub pane_id: String,
+    /// The workspace the pane belongs to, when herdr reported one. Used to
+    /// except a workspace's own panes from occupying its own checkout —
+    /// removing that checkout through herdr closes those panes with it.
+    pub workspace_id: Option<String>,
+    /// The pane's shell cwd, when herdr knows it.
+    pub cwd: Option<PathBuf>,
+    /// The pane's foreground process's cwd, when herdr knows it. This is the
+    /// one that moves when a program inside the shell changes directory.
+    pub foreground_cwd: Option<PathBuf>,
+}
+
 /// Result of `worktree.remove`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Removed {
@@ -103,14 +131,14 @@ impl Herdr {
         })
     }
 
-    /// The repositories the session knows about, reduced from one
-    /// `session.snapshot`.
+    /// The repositories the session knows about and every pane's working
+    /// directories, reduced from one `session.snapshot`.
     ///
     /// Workspaces with no `worktree` key are not repos and are skipped: that is
     /// data, not an error. Note that a workspace whose repository has an
     /// **unborn HEAD** also arrives with no `worktree` key — verified live — so
     /// a brand-new repo is invisible here and has to be reached with `--repo`.
-    pub fn session_repos(&mut self) -> Result<Vec<SessionRepo>> {
+    pub fn session_view(&mut self) -> Result<SessionView> {
         let result = self.call("session.snapshot", json!({}))?;
         // The payload is `{"type":"session_snapshot","snapshot":{...}}`; the
         // arrays live one level down, under `snapshot`. Reading them off the
@@ -123,7 +151,10 @@ impl Herdr {
                 text(&result, "type").unwrap_or("missing")
             )
         })?;
-        Ok(reduce_snapshot(snapshot))
+        Ok(SessionView {
+            repos: reduce_snapshot(snapshot),
+            panes: pane_cwds(snapshot),
+        })
     }
 
     /// herdr's own view of one repository's worktrees, used **only** for
@@ -384,4 +415,29 @@ fn reduce_snapshot(snapshot: &Value) -> Vec<SessionRepo> {
     }
 
     repos
+}
+
+/// Every pane's working directories from a `session.snapshot`, for the
+/// occupancy join. A pane with neither cwd is dropped — it can occupy nothing —
+/// but a pane with a cwd and no id is kept under a placeholder, because an
+/// unnameable occupant is still an occupant.
+fn pane_cwds(snapshot: &Value) -> Vec<PaneCwd> {
+    array(snapshot, "panes")
+        .iter()
+        .filter_map(|pane| {
+            let cwd = text(pane, "cwd").map(tidy_path);
+            let foreground_cwd = text(pane, "foreground_cwd").map(tidy_path);
+            if cwd.is_none() && foreground_cwd.is_none() {
+                return None;
+            }
+            Some(PaneCwd {
+                pane_id: text(pane, "pane_id")
+                    .unwrap_or("(pane with no id)")
+                    .to_string(),
+                workspace_id: text(pane, "workspace_id").map(str::to_string),
+                cwd,
+                foreground_cwd,
+            })
+        })
+        .collect()
 }
