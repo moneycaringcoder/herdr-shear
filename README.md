@@ -124,6 +124,7 @@ exactly one **verdict**, which is what shear is willing to do with it.
 | `dirty` | Uncommitted changes: staged, unstaged, untracked or unmerged. Overrides everything for safety. |
 | `locked` | `git worktree lock` was used on it. Somebody's explicit "do not touch this". |
 | `open` | A herdr workspace currently holds this checkout open. |
+| `occupied` | A herdr pane's working directory is inside this checkout — a pane that removing the checkout would not close. The row names the pane. |
 | `prunable` | git reports the checkout directory is gone but its admin entry survives. |
 | `gone` | The branch tracks a remote ref that no longer exists (`%(upstream:track)` says `[gone]`). |
 | `merged` | The branch tip is contained in the integration ref. |
@@ -143,12 +144,12 @@ branch would otherwise report every worktree as unmerged. Nothing carrying
 | `safe` | Clean, merged into the integration ref, upstream gone, not protected, not locked, not open in herdr, not the main checkout. The **only** verdict a bulk action may preselect. |
 | `review` | Some evidence of death, but not all of it. Removable, never preselected. |
 | `keep` | Nothing suggests this is dead. Removable only by explicit selection. |
-| `blocked` | Cannot be removed as things stand — protected, locked, open in herdr, or the main checkout. The row names the unblocking action. |
+| `blocked` | Cannot be removed as things stand — protected, locked, open in herdr, occupied by a pane, or the main checkout. The row names the unblocking action. |
 
 Every condition in `safe` must be a *positive* observation. An unanswerable
 question fails the test rather than passing it.
 
-<img src="docs/img/verdicts.svg" alt="How one worktree gets its verdict: the main checkout and anything locked or open in herdr are blocked outright; dirty is at most review; safe requires merged and gone upstream together; anything with a single death signal is review; the rest is keep." width="100%">
+<img src="docs/img/verdicts.svg" alt="How one worktree gets its verdict: the main checkout and anything locked, open in herdr, or occupied by a pane are blocked outright; dirty is at most review; safe requires merged and gone upstream together; anything with a single death signal is review; the rest is keep." width="100%">
 
 The shape of that picture is the point. A single blocker short-circuits the
 whole decision, while `safe` needs every question answered — and answered
@@ -167,14 +168,21 @@ safe worktrees at all rather than a listing full of them.
    explicitly permitted closing that workspace, and then only through herdr's
    `worktree.remove`, which closes the workspace as part of the removal. The
    review pane never does this — it shows you which workspace to close.
-5. **A dirty worktree** is removable only with `--force-dirty`, which itself
+5. **A worktree a herdr pane is sitting in is never removable** while the pane
+   is there, excepting the panes of a workspace holding the checkout open —
+   herdr's `worktree.remove` closes those with it. A pane from anywhere else
+   would be left standing in a directory that no longer exists, so no flag
+   overrides this; close the pane, or move it elsewhere, and run shear again.
+   Occupancy is a herdr fact: with no reachable socket shear cannot see panes,
+   just as it cannot see workspaces, and the scan's notes say so.
+6. **A dirty worktree** is removable only with `--force-dirty`, which itself
    requires `--i-understand-<N>-files` naming the exact at-risk count. In the
    review pane, you type that number. A confirmation that can be given without
    reading the number is not a confirmation.
-6. **Never `rm -rf`.** Removal is `git worktree remove`, or herdr's
+7. **Never `rm -rf`.** Removal is `git worktree remove`, or herdr's
    `worktree.remove` for a checkout herdr holds open. Both leave the branch and
    every commit on it in place.
-7. **Every removal is logged before it is attempted**, with the HEAD oid and the
+8. **Every removal is logged before it is attempted**, with the HEAD oid and the
    command that puts the checkout back, so a removal that half-succeeds is still
    recoverable.
 

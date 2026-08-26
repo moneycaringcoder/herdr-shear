@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use shear::config::Config;
 use shear::model::{
-    Candidate, Class, Dirt, Head, LockInfo, Merged, OpenWorkspace, PrunableInfo, RemovalRoute,
-    RepoKey, Size, Upstream, Verdict, Worktree,
+    Candidate, Class, Dirt, Head, LockInfo, Merged, Occupant, OpenWorkspace, PrunableInfo,
+    RemovalRoute, RepoKey, Size, Upstream, Verdict, Worktree,
 };
 use shear::remove::{
     check, git_remove, parse_remove_args, prunable_note, read_log, remove_one, restore_command,
@@ -92,6 +92,7 @@ fn candidate(path: &Path, repo_root: &Path, branch: Option<&str>, oid: Option<&s
         merged: Merged::Unknown,
         last_commit: None,
         open_workspace: None,
+        occupants: Vec::new(),
         protected: None,
         classes: BTreeSet::new(),
         verdict: Verdict::Safe,
@@ -371,6 +372,44 @@ fn a_worktree_open_in_herdr_is_refused_without_permission_to_close_the_workspace
         ),
         Ok(()),
         "with permission it is allowed — through the herdr route, which closes the workspace"
+    );
+}
+
+#[test]
+fn an_occupied_worktree_is_refused_under_every_permission_combination() {
+    let mut candidate = paper_candidate();
+    candidate.occupants.push(Occupant {
+        pane_id: "w2:p1".into(),
+        cwd: PathBuf::from("/nowhere/wt-topic/src"),
+    });
+    candidate.classes.insert(Class::Occupied);
+
+    assert_eq!(
+        check(&candidate, Permissions::default()),
+        Err(Refusal::Occupied {
+            pane_id: "w2:p1".into(),
+            cwd: PathBuf::from("/nowhere/wt-topic/src"),
+        })
+    );
+    assert_eq!(
+        check(&candidate, every_permission(0)),
+        Err(Refusal::Occupied {
+            pane_id: "w2:p1".into(),
+            cwd: PathBuf::from("/nowhere/wt-topic/src"),
+        }),
+        "no flag removes the directory out from under a live pane"
+    );
+
+    let sentence = check(&candidate, Permissions::default())
+        .unwrap_err()
+        .about(candidate.path());
+    assert!(
+        sentence.contains("w2:p1") && sentence.contains("/nowhere/wt-topic/src"),
+        "the refusal names the pane and where it is sitting: {sentence}"
+    );
+    assert!(
+        sentence.contains("close the pane"),
+        "and the unblocking action: {sentence}"
     );
 }
 

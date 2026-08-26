@@ -114,6 +114,20 @@ Two traps, both present in `tests/capture/session-snapshot.json`:
   the absolute path `git worktree list` prints. `herdr::tidy_path` strips `.`
   components before any join.
 
+`snapshot.panes` carries one entry per pane; shear reads `pane_id`,
+`workspace_id`, `cwd`, and `foreground_cwd` for the occupancy join. Verified
+against 0.8.2 and present in the 0.8.0 schema, so the version floor is
+unchanged. Notes from the capture and live runs:
+
+- `cwd` is the pane's shell cwd; `foreground_cwd` follows the foreground
+  process and can point far outside any checkout — the capture's first pane
+  has pyright's install directory there. Either one inside a checkout counts
+  as occupancy; the foreground one is preferred when both match.
+- herdr reports absent context as an **empty string**, never a missing key;
+  `herdr::text` filters empties, so an absent cwd arrives as `None`.
+- Pane cwds are echoed paths like `checkout_path` and go through
+  `herdr::tidy_path` before any join.
+
 ## Plugin execution environment
 
 Commands are argv arrays run with **no shell**, cwd = plugin root, and a minimal

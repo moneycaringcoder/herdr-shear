@@ -31,14 +31,18 @@ pub fn scan(config: &Config) -> Result<Inventory> {
         Ok(client) => Some(client),
         Err(err) => {
             inventory.notes.push(format!(
-                "herdr is not reachable ({err}); worktrees held open by a workspace \
-                 cannot be identified, and none will be offered for removal through herdr"
+                "herdr is not reachable ({err}); worktrees held open by a workspace and panes \
+                 working inside a checkout cannot be identified, and none will be offered for \
+                 removal through herdr"
             ));
             None
         }
     };
 
-    let (repos, mut open) = discover(config, client.as_mut(), &mut inventory.notes)?;
+    let discovery = discover(config, client.as_mut(), &mut inventory.notes)?;
+    let repos = discovery.repos;
+    let mut open = discovery.open;
+    let panes = discovery.panes;
     if repos.is_empty() {
         inventory.notes.push(
             "no git repositories in scope. Pass --repo <PATH> to scan one explicitly, or open \
@@ -217,10 +221,24 @@ pub fn scan(config: &Config) -> Result<Inventory> {
                 })
                 .cloned();
 
+            // A pane sitting inside a checkout is the occupancy
+            // `open_workspace_id` cannot see — a shell that merely `cd`-ed in
+            // from another workspace. Only the holding workspace's own panes
+            // are excepted: removing its checkout through herdr closes them
+            // with it, while a foreign pane would be left standing in a
+            // directory that no longer exists.
+            let open_workspace = open.get(&worktree.path).cloned();
+            let occupants = occupants_of(
+                &worktree.path,
+                &panes,
+                open_workspace.as_ref().map(|w| w.workspace_id.as_str()),
+            );
+
             let facts = Facts {
                 upstream: branch_row.map(|b| b.upstream.clone()).unwrap_or_default(),
                 last_commit: branch_row.and_then(|b| b.tip),
-                open_workspace: open.get(&worktree.path).cloned(),
+                open_workspace,
+                occupants,
                 protected,
                 merged: merged_state,
                 dirt,
@@ -257,6 +275,14 @@ pub fn scan(config: &Config) -> Result<Inventory> {
     Ok(inventory)
 }
 
+/// What discovery found: the repositories in scope, the checkouts the session
+/// holds open, and where every pane's processes are sitting.
+struct Discovery {
+    repos: Vec<Repo>,
+    open: BTreeMap<PathBuf, OpenWorkspace>,
+    panes: Vec<herdr::PaneCwd>,
+}
+
 /// The repositories in scope, and the checkouts the session holds open.
 ///
 /// `--repo` replaces the session entirely; otherwise the session's repositories
@@ -266,7 +292,7 @@ fn discover(
     config: &Config,
     client: Option<&mut Herdr>,
     notes: &mut Vec<String>,
-) -> Result<(Vec<Repo>, BTreeMap<PathBuf, OpenWorkspace>)> {
+) -> Result<Discovery> {
     let mut repos: Vec<Repo> = Vec::new();
     let mut open: BTreeMap<PathBuf, OpenWorkspace> = BTreeMap::new();
 
@@ -277,18 +303,27 @@ fn discover(
     // the label fell back to the id is a worse sentence than one that just says
     // "workspace w1X".
     let session = match client {
-        Some(client) => match client.session_repos() {
+        Some(client) => match client.session_view() {
             Ok(session) => session,
             Err(err) => {
                 notes.push(format!(
-                    "could not read the herdr session ({err}); workspace names are unavailable, \
-                     and without --repo only explicitly named repositories will be scanned"
+                    "could not read the herdr session ({err}); workspace names and pane \
+                     occupancy are unavailable, and without --repo only explicitly named \
+                     repositories will be scanned"
                 ));
-                Vec::new()
+                herdr::SessionView {
+                    repos: Vec::new(),
+                    panes: Vec::new(),
+                }
             }
         },
-        None => Vec::new(),
+        None => herdr::SessionView {
+            repos: Vec::new(),
+            panes: Vec::new(),
+        },
     };
+    let panes = session.panes;
+    let session = session.repos;
     for repo in &session {
         for (path, workspace) in &repo.open {
             open.insert(path.clone(), workspace.clone());
@@ -299,7 +334,7 @@ fn discover(
         for path in &config.only_repos {
             push_repo_at(path, config, &mut repos, notes);
         }
-        return Ok((repos, open));
+        return Ok(Discovery { repos, open, panes });
     }
 
     for repo in session {
@@ -331,7 +366,7 @@ fn discover(
         }
     }
 
-    Ok((repos, open))
+    Ok(Discovery { repos, open, panes })
 }
 
 fn push_repo_at(path: &Path, config: &Config, repos: &mut Vec<Repo>, notes: &mut Vec<String>) {
@@ -353,6 +388,38 @@ fn push_repo(repo: Repo, repos: &mut Vec<Repo>) {
     if !repos.iter().any(|r| r.key == repo.key) {
         repos.push(repo);
     }
+}
+
+/// The panes whose working directory is inside `path`, excepting those that
+/// belong to `own_workspace` — the workspace holding `path` open, whose panes
+/// are closed with it when the checkout is removed through herdr. Byte-exact
+/// and component-wise, like every other path comparison in the crate: `path`
+/// itself or anything below it counts, `path`-as-a-prefix-of-a-sibling-name
+/// does not.
+pub fn occupants_of(
+    path: &Path,
+    panes: &[herdr::PaneCwd],
+    own_workspace: Option<&str>,
+) -> Vec<crate::model::Occupant> {
+    let mut occupants = Vec::new();
+    for pane in panes {
+        if own_workspace.is_some() && pane.workspace_id.as_deref() == own_workspace {
+            continue;
+        }
+        // The foreground process's cwd is preferred when both match: it is the
+        // one that names what is actually running there.
+        let hit = [pane.foreground_cwd.as_ref(), pane.cwd.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|cwd| cwd.starts_with(path));
+        if let Some(cwd) = hit {
+            occupants.push(crate::model::Occupant {
+                pane_id: pane.pane_id.clone(),
+                cwd: cwd.clone(),
+            });
+        }
+    }
+    occupants
 }
 
 /// `--json`: the same inventory the table renders, machine-readable.
@@ -429,6 +496,10 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
                     "workspace_id": w.workspace_id,
                     "label": w.label,
                 })),
+                "occupants": candidate.occupants.iter().map(|o| json!({
+                    "pane_id": o.pane_id,
+                    "cwd": o.cwd.to_string_lossy(),
+                })).collect::<Vec<_>>(),
                 "bytes": match candidate.size {
                     Size::Bytes(bytes) => json!(bytes),
                     Size::Gone => json!(0),

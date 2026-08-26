@@ -22,8 +22,8 @@ use shear::classify::{self, Facts};
 use shear::config::Config;
 use shear::git;
 use shear::model::{
-    Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, PrunableInfo,
-    RepoKey, Upstream, Verdict, Worktree,
+    Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, Occupant, OpenWorkspace,
+    PrunableInfo, RepoKey, Upstream, Verdict, Worktree,
 };
 
 use fixtures::{pin_git_env, Fixture};
@@ -494,6 +494,7 @@ fn facts_for(inventory: &Inventory, path: &Path) -> Facts {
         merged: candidate.merged,
         last_commit: candidate.last_commit,
         open_workspace: candidate.open_workspace,
+        occupants: Vec::new(),
         protected: None,
     }
 }
@@ -554,6 +555,7 @@ fn merged_unknown_never_satisfies_safe() {
         merged: Merged::Into("origin/main".into()),
         last_commit: Some(SystemTime::now()),
         open_workspace: None,
+        occupants: Vec::new(),
         protected: None,
     };
     let now = SystemTime::now();
@@ -600,6 +602,93 @@ fn merged_unknown_never_satisfies_safe() {
     );
 }
 
+/// A pane sitting inside the checkout blocks it, even when every safe condition
+/// holds: `occupied` only ever narrows, like protection and the lock.
+#[test]
+fn an_occupied_checkout_is_blocked_however_safe_it_looks() {
+    let safe = Facts {
+        worktree: bare_worktree(),
+        dirt: Dirt::default(),
+        upstream: Upstream {
+            name: Some("refs/remotes/origin/topic".into()),
+            gone: true,
+            ahead: 0,
+            behind: 0,
+        },
+        merged: Merged::Into("origin/main".into()),
+        last_commit: Some(SystemTime::now()),
+        open_workspace: None,
+        occupants: Vec::new(),
+        protected: None,
+    };
+    let now = SystemTime::now();
+    assert_eq!(
+        classify::classify(safe.clone(), week(2), now).verdict,
+        Verdict::Safe,
+        "the base facts must be safe, or this test proves nothing"
+    );
+
+    let occupied = classify::classify(
+        Facts {
+            occupants: vec![Occupant {
+                pane_id: "w2:p1".into(),
+                cwd: PathBuf::from("/scratch/wt/src"),
+            }],
+            ..safe
+        },
+        week(2),
+        now,
+    );
+    assert_eq!(occupied.verdict, Verdict::Blocked);
+    assert!(occupied.is(Class::Occupied));
+    assert!(
+        occupied.reason.contains("pane w2:p1")
+            && occupied.reason.contains("/scratch/wt/src")
+            && occupied.reason.contains("unblock"),
+        "the reason names the pane, where it is, and the unblocking action: {}",
+        occupied.reason
+    );
+
+    let signals = classify::signals(&occupied, now);
+    assert!(
+        signals.iter().any(|s| s.contains("pane w2:p1")),
+        "the detail block names the pane too: {signals:?}"
+    );
+}
+
+/// Two occupants: the sentence names one pane and counts the rest, because a
+/// detail line that lists every pane stops fitting exactly when the problem is
+/// worst.
+#[test]
+fn a_second_occupant_is_counted_rather_than_listed() {
+    let facts = Facts {
+        worktree: bare_worktree(),
+        dirt: Dirt::default(),
+        upstream: Upstream::default(),
+        merged: Merged::Unknown,
+        last_commit: None,
+        open_workspace: None,
+        occupants: vec![
+            Occupant {
+                pane_id: "w2:p1".into(),
+                cwd: PathBuf::from("/scratch/wt"),
+            },
+            Occupant {
+                pane_id: "w9:p4".into(),
+                cwd: PathBuf::from("/scratch/wt/deep"),
+            },
+        ],
+        protected: None,
+    };
+    let candidate = classify::classify(facts, week(2), SystemTime::now());
+    assert_eq!(candidate.verdict, Verdict::Blocked);
+    assert!(
+        candidate.reason.contains("and 1 other pane"),
+        "{}",
+        candidate.reason
+    );
+}
+
 /// A worktree with no known commit time is not stale. "I do not know when this
 /// was last touched" is not "this was last touched a long time ago".
 #[test]
@@ -611,6 +700,7 @@ fn an_unknown_commit_time_is_not_staleness() {
         merged: Merged::Unknown,
         last_commit: None,
         open_workspace: None,
+        occupants: Vec::new(),
         protected: None,
     };
     let candidate = classify::classify(facts, week(2), SystemTime::now());
@@ -704,6 +794,7 @@ fn dirty_signals_quote_every_kind_of_dirt_in_significance_order() {
             merged: Merged::No("origin/main".into()),
             last_commit: Some(now),
             open_workspace: None,
+            occupants: Vec::new(),
             protected: None,
         },
         week(2),
@@ -737,6 +828,7 @@ fn protected_signals_quote_pattern_precede_dirt_and_name_the_unblocking_action()
             merged: Merged::No("origin/main".into()),
             last_commit: Some(now),
             open_workspace: None,
+            occupants: Vec::new(),
             protected: Some("release/*".into()),
         },
         week(2),
@@ -775,6 +867,7 @@ fn unprotected_signals_do_not_invent_a_protection_reason() {
             merged: Merged::No("origin/main".into()),
             last_commit: Some(now),
             open_workspace: None,
+            occupants: Vec::new(),
             protected: None,
         },
         week(2),
@@ -806,6 +899,7 @@ fn an_unknown_merge_signal_says_the_question_was_not_askable() {
             merged: Merged::Unknown,
             last_commit: Some(now),
             open_workspace: None,
+            occupants: Vec::new(),
             protected: None,
         },
         week(2),
@@ -842,6 +936,7 @@ fn no_commit_time_never_produces_a_stale_or_age_signal() {
             merged: Merged::Unknown,
             last_commit: None,
             open_workspace: None,
+            occupants: Vec::new(),
             protected: None,
         },
         week(2),
@@ -872,6 +967,7 @@ fn only_non_safe_verdicts_end_with_the_first_failed_safe_condition() {
         merged: Merged::Into("origin/main".into()),
         last_commit: Some(now),
         open_workspace: None,
+        occupants: Vec::new(),
         protected: None,
     };
     let safe = classify::classify(safe_facts.clone(), week(2), now);

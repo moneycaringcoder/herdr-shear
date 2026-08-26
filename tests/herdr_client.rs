@@ -233,14 +233,15 @@ fn assert_wire(raw: &str, method: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn session_repos_reads_the_arrays_from_result_snapshot() {
+fn session_view_reads_the_arrays_from_result_snapshot() {
     let server = Server::new(
         "snapshot",
         vec![Some(line(&capture("session-snapshot.json")))],
     );
     let (_guard, mut client) = server.client();
 
-    let repos = client.session_repos().expect("read the session");
+    let view = client.session_view().expect("read the session");
+    let repos = view.repos;
 
     let request = assert_wire(&server.requests()[0], "session.snapshot");
     assert_eq!(
@@ -277,6 +278,66 @@ fn session_repos_reads_the_arrays_from_result_snapshot() {
         "every checkout the session holds open, grouped under one repo"
     );
     assert_eq!(crescendo.open[1].1.label, "media-throughput");
+
+    // Every pane arrives with both working directories, and the two are kept
+    // apart: the shell's cwd and the foreground process's cwd are different
+    // facts, and the capture's first pane proves it by having different ones.
+    assert_eq!(view.panes.len(), 10, "every pane in the capture");
+    let first = &view.panes[0];
+    assert_eq!(first.pane_id, "wM:p1");
+    assert_eq!(first.workspace_id.as_deref(), Some("wM"));
+    assert_eq!(first.cwd.as_deref(), Some(Path::new("/home/you/repos")));
+    assert_eq!(
+        first.foreground_cwd.as_deref(),
+        Some(Path::new(
+            "/home/you/.local/share/mise/installs/node/24.18.0/lib/node_modules/pyright/dist"
+        ))
+    );
+}
+
+#[test]
+fn pane_reading_treats_empty_as_absent_and_never_drops_a_placeable_pane() {
+    // herdr reports absent context as an empty string, never a missing key, so
+    // the empty string must arrive as `None`. A pane with neither directory can
+    // occupy nothing and is dropped; a pane with a directory but no id is kept
+    // under a placeholder, because an unnameable occupant is still an occupant
+    // and dropping it would widen what can be removed.
+    let reply = json!({
+        "id": "shear:1",
+        "result": {
+            "type": "session_snapshot",
+            "snapshot": {
+                "workspaces": [],
+                "panes": [
+                    {"pane_id": "w1:p1", "workspace_id": "w1",
+                     "cwd": "", "foreground_cwd": "/scratch/wt"},
+                    {"pane_id": "w1:p2", "workspace_id": "w1",
+                     "cwd": "", "foreground_cwd": ""},
+                    {"workspace_id": "w2", "cwd": "/scratch/wt/deep"},
+                ],
+            },
+        },
+    });
+    let server = Server::new("snapshot-pane-rules", vec![Some(line(&reply))]);
+    let (_guard, mut client) = server.client();
+
+    let panes = client.session_view().expect("read the session").panes;
+    assert_eq!(
+        panes.len(),
+        2,
+        "the pane with no directory at all is dropped"
+    );
+
+    assert_eq!(panes[0].pane_id, "w1:p1");
+    assert_eq!(panes[0].cwd, None, "an empty string is absence, not a path");
+    assert_eq!(
+        panes[0].foreground_cwd.as_deref(),
+        Some(Path::new("/scratch/wt"))
+    );
+
+    assert_eq!(panes[1].pane_id, "(pane with no id)");
+    assert_eq!(panes[1].workspace_id.as_deref(), Some("w2"));
+    assert_eq!(panes[1].cwd.as_deref(), Some(Path::new("/scratch/wt/deep")));
 }
 
 #[test]
@@ -298,7 +359,7 @@ fn a_reply_with_no_snapshot_key_is_a_loud_error_and_not_an_empty_session() {
     let (_guard, mut client) = server.client();
 
     let err = client
-        .session_repos()
+        .session_view()
         .expect_err("a missing `snapshot` key must be an error, not an empty session");
     let message = err.to_string();
     assert!(
@@ -340,7 +401,7 @@ fn a_checkout_path_ending_in_a_dot_still_joins_against_gits_absolute_path() {
 
     let server = Server::new("snapshot-dot", vec![Some(line(&captured))]);
     let (_guard, mut client) = server.client();
-    let repos = client.session_repos().expect("read the session");
+    let repos = client.session_view().expect("read the session").repos;
 
     let collide = repos
         .iter()

@@ -72,7 +72,7 @@ RESULTS: dict[str, tuple[str, ...]] = {
 # result. "optional" means shear reads it when present and copes when it is
 # not, so the field must still exist but need not be mandatory.
 OBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
-    "SessionSnapshot": {"required": ("workspaces",), "optional": ()},
+    "SessionSnapshot": {"required": ("workspaces",), "optional": ("panes",)},
     "WorkspaceInfo": {
         "required": ("workspace_id", "label"),
         # No `worktree` key means the workspace is not a repository — and note
@@ -93,6 +93,17 @@ OBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
         # through Herdr or through git.
         "required": ("path",),
         "optional": ("open_workspace_id",),
+    },
+    "PaneInfo": {
+        # Read for the occupancy join: a pane whose working directory is inside
+        # a checkout blocks its removal, unless the pane belongs to the
+        # workspace holding that checkout open. shear copes with any of these
+        # being absent — a pane it cannot place occupies nothing, one it cannot
+        # name occupies under a placeholder, and one it cannot attribute to a
+        # workspace is never excepted — so all four are optional, but they must
+        # still exist.
+        "required": (),
+        "optional": ("pane_id", "workspace_id", "cwd", "foreground_cwd"),
     },
 }
 
