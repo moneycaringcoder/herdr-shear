@@ -513,7 +513,15 @@ fn foot_lines(review: &Review, width: usize, budget: usize) -> Vec<String> {
     // the user is deciding. It is never the block that gets dropped.
     blocks.push(render::wrap(render::SAFETY_NOTE, width));
     blocks.push(vec![
-        if width >= 72 { HELP_WIDE } else { HELP_NARROW }.to_string()
+        // Derived from the string, not a magic number, so growing the help can
+        // never leave a band of widths where it is silently clipped — and the
+        // part that gets cut is `q quit`, the documented way out.
+        if width >= render::display_width(HELP_WIDE) {
+            HELP_WIDE
+        } else {
+            HELP_NARROW
+        }
+        .to_string(),
     ]);
 
     let mut dropped: BTreeSet<usize> = BTreeSet::new();
@@ -711,14 +719,32 @@ pub fn decode(bytes: &[u8]) -> Vec<Key> {
                 // `Esc [ A` and friends. A lone Esc is a cancel, so the two must
                 // never be confused: losing a selection to an arrow key would be
                 // exactly the mis-key an overlay pane exists to survive.
+                //
+                // The rest of an unrecognized CSI or SS3 sequence is consumed,
+                // never decoded byte by byte: F3 arrives as `Esc O R`, and a
+                // trailing byte that happens to be a binding must not act.
                 if bytes.get(index) == Some(&b'[') && index + 1 < bytes.len() {
-                    let final_byte = bytes[index + 1];
-                    index += 2;
+                    index += 1;
+                    // Parameter and intermediate bytes run to the first final
+                    // byte (0x40..=0x7e), which ends the sequence.
+                    let mut final_byte = 0u8;
+                    while index < bytes.len() {
+                        let candidate = bytes[index];
+                        index += 1;
+                        if (0x40..=0x7e).contains(&candidate) {
+                            final_byte = candidate;
+                            break;
+                        }
+                    }
                     match final_byte {
                         b'A' => Key::Up,
                         b'B' => Key::Down,
                         _ => Key::Other,
                     }
+                } else if bytes.get(index) == Some(&b'O') && index + 1 < bytes.len() {
+                    // SS3: one final byte follows.
+                    index += 2;
+                    Key::Other
                 } else {
                     Key::Cancel
                 }
@@ -984,7 +1010,7 @@ pub fn adopt(mut review: Review, inventory: Inventory) -> Review {
         vec!["Rescanned.".into()]
     } else {
         vec![format!(
-            "Rescanned. Dropped {dropped} selected {}: gone, or no longer removable.",
+            "Rescanned. Dropped {dropped} selected {}: gone, or not removable.",
             if dropped == 1 {
                 "worktree"
             } else {

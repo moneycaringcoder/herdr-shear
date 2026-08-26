@@ -555,6 +555,7 @@ fn apply_is_total() {
         Key::SelectSafe,
         Key::SelectNone,
         Key::Remove,
+        Key::Rescan,
         Key::Quit,
         Key::Confirm,
         Key::Cancel,
@@ -575,6 +576,7 @@ fn apply_is_total() {
             worktrees: 1,
         },
         Mode::Removing,
+        Mode::Rescanning,
         Mode::Done,
     ] {
         for key in keys {
@@ -603,10 +605,17 @@ fn the_frame_is_exactly_the_size_it_was_given() {
         drive(review(), &[Key::SelectSafe]),
         drive(review(), &[Key::SelectSafe, Key::Remove]),
         drive(with_a_dirty_row(), &[Key::Remove, Key::Confirm]),
+        {
+            let mut rescanning = review();
+            rescanning.mode = Mode::Rescanning;
+            rescanning
+        },
         Review::new(Inventory::default()),
     ];
     for state in &states {
-        for columns in [40usize, 80, 100, 200] {
+        // 72 and 79 bracket the band where an oversized wide-help string would
+        // be silently clipped by a fixed width gate.
+        for columns in [40usize, 72, 79, 80, 100, 200] {
             for rows in [8usize, 12, 24, 50] {
                 let rendered = frame(state, columns, rows);
                 assert_eq!(
@@ -897,6 +906,16 @@ fn every_documented_key_decodes() {
     );
     assert_eq!(decode(b""), Vec::new());
     assert_eq!(decode(b"\x1b[Z"), vec![Key::Other]);
+}
+
+#[test]
+fn an_escape_sequence_tail_never_acts_as_a_key() {
+    // F3 arrives as SS3 `Esc O R`; a modified F3 as CSI `Esc [ 1 ; 2 R`. The
+    // trailing `R` is part of the sequence, not a rescan.
+    assert_eq!(decode(b"\x1bOR"), vec![Key::Other]);
+    assert_eq!(decode(b"\x1b[1;2R"), vec![Key::Other]);
+    // And the recognized arrows still decode, including back to back.
+    assert_eq!(decode(b"\x1b[A\x1b[B"), vec![Key::Up, Key::Down]);
 }
 
 // ---------------------------------------------------------------------------
