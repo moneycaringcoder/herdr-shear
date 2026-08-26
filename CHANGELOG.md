@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-26
+
 ### Added
 
 - The review pane's first frame now shows last run's disk figure, marked
