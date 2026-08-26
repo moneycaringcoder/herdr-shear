@@ -471,8 +471,9 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
                 "open_workspace": candidate.open_workspace.as_ref().map(|w| json!({
                     "workspace_id": w.workspace_id,
                     "label": w.label,
-                    // `null` means herdr did not say, which is not `unknown`:
-                    // herdr's own `unknown` is a reported state.
+                    // `null` means herdr did not say, or said something this
+                    // build does not know; either way it is not `unknown`,
+                    // which is a state herdr reports.
                     "agent_status": w.agent_status.map(|s| s.label()),
                 })),
                 "bytes": match candidate.size {

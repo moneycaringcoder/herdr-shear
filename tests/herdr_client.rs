@@ -20,6 +20,9 @@ use serde_json::{json, Value};
 use shear::herdr::{self, Herdr};
 use shear::model::AgentStatus;
 
+#[path = "fixtures.rs"]
+mod fixtures;
+
 // ---------------------------------------------------------------------------
 // A real server, one request per connection
 // ---------------------------------------------------------------------------
@@ -297,6 +300,70 @@ fn session_view_reads_the_arrays_from_result_snapshot() {
         .expect("w15 has no worktree key and must still be summarized");
     assert_eq!(shear.label, "shear");
     assert_eq!(shear.agent_status, Some(AgentStatus::Working));
+}
+
+#[test]
+fn an_open_checkout_is_named_through_the_id_join_when_the_snapshot_has_no_worktree_key() {
+    // The regression that took a live session to notice: a workspace can
+    // arrive in the snapshot with no `worktree` key while `worktree.list`
+    // reports it holding a checkout open. A path join finds nothing then, and
+    // the row's workspace falls back to its bare id and loses its agent
+    // status. The id join is what this test holds in place.
+    fixtures::pin_git_env();
+    let fixture = fixtures::Fixture::new("id-join");
+    let worktree = fixture.active_worktree("held-open");
+
+    let snapshot = json!({
+        "id": "shear:1",
+        "result": {
+            "type": "session_snapshot",
+            "snapshot": {
+                "workspaces": [
+                    {"workspace_id": "w15", "label": "shear",
+                     "agent_status": "working", "worktree": null},
+                ],
+                "panes": [],
+            },
+        },
+    });
+    let worktree_list = json!({
+        "id": "shear:2",
+        "result": {
+            "type": "worktree_list",
+            "worktrees": [
+                {"path": worktree.to_string_lossy(), "open_workspace_id": "w15"},
+            ],
+        },
+    });
+    let server = Server::new(
+        "id-join",
+        vec![Some(line(&snapshot)), Some(line(&worktree_list))],
+    );
+    // Holds the env guard so no other test repoints the socket mid-scan.
+    let (_guard, _client) = server.client();
+
+    let config = shear::config::Config {
+        only_repos: vec![fixture.repo.clone()],
+        integration_ref: Some("main".into()),
+        ..shear::config::Config::default()
+    };
+    let inventory = shear::shear::scan(&config).expect("scan against the fake herdr");
+    let candidate = inventory
+        .find(&worktree)
+        .expect("the held-open worktree is in the inventory");
+
+    let open = candidate
+        .open_workspace
+        .as_ref()
+        .expect("worktree.list said w15 holds it open");
+    assert_eq!(open.label, "shear", "named through the id join, not `w15`");
+    assert_eq!(open.agent_status, Some(AgentStatus::Working));
+    assert!(
+        candidate.reason.contains("workspace shear")
+            && candidate.reason.contains("an agent is still working"),
+        "and the sentence carries both: {}",
+        candidate.reason
+    );
 }
 
 #[test]

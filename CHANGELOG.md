@@ -14,9 +14,9 @@ All notable changes to this project are documented here. The format follows
   reaches the review pane's detail line, the signals, and `--json`'s `reason`.
   Only those two states are said — idle, done, and unknown add nothing a user
   would act on. The status comes from the `session.snapshot` shear already
-  reads. `--json`'s `open_workspace` object gains an `agent_status` field,
-  `null` when herdr did not say, and the upstream canary's contract pins the
-  field.
+  reads. `--json`'s `open_workspace` object gains an `agent_status` field —
+  `null` when herdr did not say, or said a state this build does not know —
+  and the upstream canary's contract pins the field.
 
 ### Fixed
 

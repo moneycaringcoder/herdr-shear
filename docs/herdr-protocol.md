@@ -101,8 +101,11 @@ error in `src/herdr.rs`, not a fallback.
 
 `workspace.worktree` (absent entirely for non-git workspaces) carries
 `repo_key`, `repo_name`, `repo_root`, `checkout_path`, `is_linked_worktree`.
+Every workspace also carries `agent_status` (`idle`, `working`, `blocked`,
+`done`, `unknown`) — herdr's own per-workspace aggregation, which ranks
+`working` above `blocked`.
 
-Two traps, both present in `tests/capture/session-snapshot.json`:
+Three traps, the first two present in `tests/capture/session-snapshot.json`:
 
 - **A git repository can arrive with no `worktree` key.** Observed for a
   workspace whose repository had an unborn HEAD (no commits yet). Such a repo is
@@ -113,6 +116,12 @@ Two traps, both present in `tests/capture/session-snapshot.json`:
   with `--cwd .` arrives as `/home/you/repos/app/.`, which does not string-match
   the absolute path `git worktree list` prints. `herdr::tidy_path` strips `.`
   components before any join.
+- **A workspace with no `worktree` key can still hold a checkout open.**
+  Verified live against 0.8.2: `worktree.list` reported a checkout's
+  `open_workspace_id` while the snapshot carried that workspace with
+  `worktree: null`. A path join finds nothing then; the label and agent status
+  have to be joined by workspace id, which is why `session_view` summarizes
+  *every* workspace, repo or not.
 
 ## Plugin execution environment
 
