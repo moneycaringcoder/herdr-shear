@@ -28,6 +28,11 @@ pub struct Facts {
     pub merged: Merged,
     pub last_commit: Option<SystemTime>,
     pub open_workspace: Option<OpenWorkspace>,
+    /// herdr panes whose working directory is inside this checkout, excepting
+    /// the panes of a workspace holding it open. Empty when herdr is
+    /// unreachable — "unknown", not "unoccupied" — so absence never widens
+    /// what can be removed.
+    pub occupants: Vec<crate::model::Occupant>,
     /// Protection pattern that matched the checkout path or branch name.
     pub protected: Option<String>,
 }
@@ -40,8 +45,9 @@ pub struct Facts {
 ///   `Verdict::Blocked`, reason "main checkout".
 /// - A configured **protection pattern** is `Blocked` and cannot be overridden.
 ///   The reason names the pattern and the config file to edit.
-/// - **Locked** or **open in herdr** is `Blocked`. The reason names the
-///   unblocking action (`git worktree unlock`, or closing the workspace).
+/// - **Locked**, **open in herdr**, or **occupied by a pane** is `Blocked`. The
+///   reason names the unblocking action (`git worktree unlock`, closing the
+///   workspace, or moving the pane out of the checkout).
 /// - **Dirty** is at most `Review`, never `Safe`, and never preselected. The
 ///   reason names the file count at risk.
 /// - **Safe** requires all of: clean, merged into the integration ref, upstream
@@ -66,6 +72,7 @@ pub fn classify(facts: Facts, stale_after: std::time::Duration, now: SystemTime)
         merged: facts.merged,
         last_commit: facts.last_commit,
         open_workspace: facts.open_workspace,
+        occupants: facts.occupants,
         protected: facts.protected,
         worktree: facts.worktree,
         classes,
@@ -110,6 +117,11 @@ pub fn signals(candidate: &Candidate, now: SystemTime) -> Vec<String> {
             Class::OpenInHerdr => {
                 if let Some(workspace) = &candidate.open_workspace {
                     signals.push(open_workspace_phrase(workspace));
+                }
+            }
+            Class::Occupied => {
+                if let Some(phrase) = occupied_phrase(&candidate.occupants) {
+                    signals.push(phrase);
                 }
             }
             Class::Prunable => {
@@ -171,6 +183,9 @@ fn first_failed_safe_condition(candidate: &Candidate) -> String {
     if candidate.open_workspace.is_some() {
         return "not safe: the checkout is open in herdr".to_string();
     }
+    if !candidate.occupants.is_empty() {
+        return "not safe: a pane is working inside the checkout".to_string();
+    }
     if candidate.dirt.is_dirty() {
         return "not safe: the checkout is not clean".to_string();
     }
@@ -224,6 +239,9 @@ pub fn classes_of(
     if facts.open_workspace.is_some() {
         classes.insert(Class::OpenInHerdr);
     }
+    if !facts.occupants.is_empty() {
+        classes.insert(Class::Occupied);
+    }
     if facts.worktree.prunable.is_some() {
         classes.insert(Class::Prunable);
     }
@@ -269,7 +287,10 @@ pub fn verdict_of(facts: &Facts, classes: &std::collections::BTreeSet<Class>) ->
         return Verdict::Blocked;
     }
     // 3. Removable only after the user does something themselves.
-    if classes.contains(&Class::Locked) || classes.contains(&Class::OpenInHerdr) {
+    if classes.contains(&Class::Locked)
+        || classes.contains(&Class::OpenInHerdr)
+        || classes.contains(&Class::Occupied)
+    {
         return Verdict::Blocked;
     }
 
@@ -325,6 +346,9 @@ pub fn reason_for(
     }
     if let Some(workspace) = &facts.open_workspace {
         return open_workspace_phrase(workspace);
+    }
+    if let Some(phrase) = occupied_phrase(&facts.occupants) {
+        return phrase;
     }
 
     let mut parts: Vec<String> = Vec::new();
@@ -395,6 +419,23 @@ fn open_workspace_phrase(workspace: &OpenWorkspace) -> String {
         "open in the herdr workspace {}{doing}; close it to unblock",
         workspace.label
     )
+}
+
+/// Names the pane sitting inside the checkout, and the unblocking action. The
+/// first pane is named rather than all of them, because the sentence has to fit
+/// on a detail line and one concrete pane id is enough to act on.
+fn occupied_phrase(occupants: &[crate::model::Occupant]) -> Option<String> {
+    let first = occupants.first()?;
+    let others = match occupants.len() {
+        1 => String::new(),
+        2 => " (and 1 other pane)".to_string(),
+        n => format!(" (and {} other panes)", n - 1),
+    };
+    Some(format!(
+        "pane {} is working in {}{others}; close it or move it elsewhere to unblock",
+        first.pane_id,
+        first.cwd.display()
+    ))
 }
 
 fn prunable_phrase(worktree: &Worktree) -> Option<String> {

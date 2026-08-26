@@ -283,6 +283,21 @@ fn session_view_reads_the_arrays_from_result_snapshot() {
     );
     assert_eq!(crescendo.open[1].1.label, "media-throughput");
 
+    // Every pane arrives with both working directories, and the two are kept
+    // apart: the shell's cwd and the foreground process's cwd are different
+    // facts, and the capture's first pane proves it by having different ones.
+    assert_eq!(view.panes.len(), 10, "every pane in the capture");
+    let first = &view.panes[0];
+    assert_eq!(first.pane_id, "wM:p1");
+    assert_eq!(first.workspace_id.as_deref(), Some("wM"));
+    assert_eq!(first.cwd.as_deref(), Some(Path::new("/home/you/repos")));
+    assert_eq!(
+        first.foreground_cwd.as_deref(),
+        Some(Path::new(
+            "/home/you/.local/share/mise/installs/node/24.18.0/lib/node_modules/pyright/dist"
+        ))
+    );
+
     // The agent status rides along: w6's agent is working, wE's is idle, and
     // herdr-collide's own `unknown` is a reported state, not an absence.
     assert_eq!(crescendo.open[0].1.agent_status, Some(AgentStatus::Working));
@@ -364,6 +379,51 @@ fn an_open_checkout_is_named_through_the_id_join_when_the_snapshot_has_no_worktr
         "and the sentence carries both: {}",
         candidate.reason
     );
+}
+
+#[test]
+fn pane_reading_treats_empty_as_absent_and_never_drops_a_placeable_pane() {
+    // herdr reports absent context as an empty string, never a missing key, so
+    // the empty string must arrive as `None`. A pane with neither directory can
+    // occupy nothing and is dropped; a pane with a directory but no id is kept
+    // under a placeholder, because an unnameable occupant is still an occupant
+    // and dropping it would widen what can be removed.
+    let reply = json!({
+        "id": "shear:1",
+        "result": {
+            "type": "session_snapshot",
+            "snapshot": {
+                "workspaces": [],
+                "panes": [
+                    {"pane_id": "w1:p1", "workspace_id": "w1",
+                     "cwd": "", "foreground_cwd": "/scratch/wt"},
+                    {"pane_id": "w1:p2", "workspace_id": "w1",
+                     "cwd": "", "foreground_cwd": ""},
+                    {"workspace_id": "w2", "cwd": "/scratch/wt/deep"},
+                ],
+            },
+        },
+    });
+    let server = Server::new("snapshot-pane-rules", vec![Some(line(&reply))]);
+    let (_guard, mut client) = server.client();
+
+    let panes = client.session_view().expect("read the session").panes;
+    assert_eq!(
+        panes.len(),
+        2,
+        "the pane with no directory at all is dropped"
+    );
+
+    assert_eq!(panes[0].pane_id, "w1:p1");
+    assert_eq!(panes[0].cwd, None, "an empty string is absence, not a path");
+    assert_eq!(
+        panes[0].foreground_cwd.as_deref(),
+        Some(Path::new("/scratch/wt"))
+    );
+
+    assert_eq!(panes[1].pane_id, "(pane with no id)");
+    assert_eq!(panes[1].workspace_id.as_deref(), Some("w2"));
+    assert_eq!(panes[1].cwd.as_deref(), Some(Path::new("/scratch/wt/deep")));
 }
 
 #[test]

@@ -437,6 +437,7 @@ fn run_full_read_path(fixture: &Fixture) -> (Inventory, Vec<String>) {
                     .unwrap_or_default(),
                 last_commit: branch_row.and_then(|row| row.tip),
                 open_workspace: None,
+                occupants: Vec::new(),
                 protected: None,
                 merged: merged_state,
                 dirt,
