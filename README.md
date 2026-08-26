@@ -265,6 +265,7 @@ shear --undo-log
   a            select every `safe` row, and nothing else
   n            clear the selection
   r            remove the selection, after confirming
+  R            rescan: re-read git and herdr without touching anything
   q / Esc      quit without removing anything
 ```
 
@@ -275,6 +276,11 @@ included — cannot be selected at all; the refusal names the unblocking action.
 A clean selection is confirmed once, by count and by bytes. A selection that
 contains anything dirty gets a second, differently worded confirmation that
 names the exact number of at-risk files and requires you to type that number.
+
+`R` re-reads the world without touching it — after a fetch, a merge, or a
+branch deletion somewhere else — and the selection follows the worktrees by
+path, not by row number. A selected row that is gone, or that the new scan
+calls blocked, drops out and the pane says so.
 
 ## Configuration
 
