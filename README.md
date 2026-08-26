@@ -261,8 +261,8 @@ shear --undo-log
 ```
 
 `a` *replaces* the selection with exactly the safe rows, so it can never leave
-something unsafe selected by accident. The main checkout cannot be selected at
-all.
+something unsafe selected by accident. A `blocked` row — the main checkout
+included — cannot be selected at all; the refusal names the unblocking action.
 
 A clean selection is confirmed once, by count and by bytes. A selection that
 contains anything dirty gets a second, differently worded confirmation that

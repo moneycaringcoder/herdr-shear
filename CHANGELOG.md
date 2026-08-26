@@ -22,6 +22,17 @@ All notable changes to this project are documented here. The format follows
   0.1.1 roadmap stopped on evidence: nothing can validate a cached size
   cheaply, so it is drawn as a claim while the walk runs anyway, never trusted
   in its place.
+### Fixed
+
+- `space` in the review pane now refuses a `blocked` row instead of selecting
+  it and warning that the removal would be refused. The changelog for 0.1.1
+  already said a protected row "cannot be selected"; now that is true, and it
+  is true for every blocked row — locked, open in herdr, or protected — because
+  the pane never grants the permissions that could remove one. The refusal
+  message names the unblocking action, at the keypress rather than at removal
+  time.
+- The CLI help now lists `origin/master` in the integration-ref guess order,
+  between `origin/main` and `main`, matching what the code has always tried.
 
 ## [0.1.1] - 2026-08-18
 
