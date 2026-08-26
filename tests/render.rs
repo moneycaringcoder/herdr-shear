@@ -47,6 +47,7 @@ impl Row {
             merged: Merged::Unknown,
             last_commit: None,
             open_workspace: None,
+            occupants: Vec::new(),
             protected: None,
             classes: BTreeSet::new(),
             verdict: Verdict::Keep,
@@ -119,6 +120,7 @@ impl Row {
         self.0.open_workspace = Some(OpenWorkspace {
             workspace_id: "ws-1".into(),
             label: label.into(),
+            agent_status: None,
         });
         self
     }

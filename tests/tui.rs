@@ -42,6 +42,7 @@ impl Row {
             merged: Merged::No("origin/main".into()),
             last_commit: Some(SystemTime::now() - Duration::from_secs(21 * 86_400 + 43_200)),
             open_workspace: None,
+            occupants: Vec::new(),
             protected: None,
             classes: BTreeSet::new(),
             verdict: Verdict::Keep,
@@ -106,6 +107,7 @@ impl Row {
         self.0.open_workspace = Some(OpenWorkspace {
             workspace_id: "ws-1".into(),
             label: "ui-review".into(),
+            agent_status: None,
         });
         self
     }

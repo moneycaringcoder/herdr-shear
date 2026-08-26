@@ -163,6 +163,10 @@ pub enum Class {
     Locked,
     /// Open as a herdr workspace. Removable only after closing the workspace.
     OpenInHerdr,
+    /// A herdr pane's process is sitting inside the checkout — one the removal
+    /// would not close with it. Removing the checkout would yank a live
+    /// process's working directory out from under it.
+    Occupied,
     /// git reports `prunable` — the checkout directory is gone but the admin
     /// entry survives.
     Prunable,
@@ -181,6 +185,7 @@ impl Class {
             Class::Dirty => "dirty",
             Class::Locked => "locked",
             Class::OpenInHerdr => "open",
+            Class::Occupied => "occupied",
             Class::Prunable => "prunable",
             Class::GoneUpstream => "gone",
             Class::Merged => "merged",
@@ -205,8 +210,9 @@ pub enum Verdict {
     /// Nothing suggests this is dead. Removable only by explicit selection, and
     /// the table says so.
     Keep,
-    /// Cannot be removed as things stand: protected, locked, open in herdr, or
-    /// the main checkout. The row names the unblocking action.
+    /// Cannot be removed as things stand: protected, locked, open in herdr,
+    /// occupied by a pane, or the main checkout. The row names the unblocking
+    /// action.
     Blocked,
 }
 
@@ -301,6 +307,11 @@ pub struct Candidate {
     pub open_workspace: Option<OpenWorkspace>,
     /// Protection pattern that matched this checkout, if any.
     pub protected: Option<String>,
+    /// herdr panes whose working directory is inside this checkout, excepting
+    /// the panes of a workspace holding it open, which a herdr-route removal
+    /// closes with it. Empty when herdr is unreachable, which is "unknown",
+    /// not "unoccupied" — the reason `occupied` only ever narrows.
+    pub occupants: Vec<Occupant>,
     pub classes: BTreeSet<Class>,
     pub verdict: Verdict,
     pub size: Size,
@@ -326,6 +337,57 @@ impl Candidate {
 pub struct OpenWorkspace {
     pub workspace_id: String,
     pub label: String,
+    /// What the workspace's agents are doing, when the snapshot said. `None`
+    /// when herdr did not say — a `worktree.list` row with no snapshot entry —
+    /// or said something this build does not know.
+    pub agent_status: Option<AgentStatus>,
+}
+
+/// What a workspace's agents are doing, as herdr reports it. Worth carrying
+/// because "this checkout is open" and "an agent is mid-task in this checkout"
+/// call for different amounts of hesitation before closing the workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentStatus {
+    Idle,
+    Working,
+    /// Waiting on user input — an approval prompt, a question.
+    Blocked,
+    Done,
+    Unknown,
+}
+
+impl AgentStatus {
+    /// Parses herdr's `agent_status` string. A value this build does not know
+    /// is `None`, not an error: a newer herdr may grow states, and misreading
+    /// one as `Unknown` would erase the distinction the enum exists to keep.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "idle" => Some(AgentStatus::Idle),
+            "working" => Some(AgentStatus::Working),
+            "blocked" => Some(AgentStatus::Blocked),
+            "done" => Some(AgentStatus::Done),
+            "unknown" => Some(AgentStatus::Unknown),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AgentStatus::Idle => "idle",
+            AgentStatus::Working => "working",
+            AgentStatus::Blocked => "blocked",
+            AgentStatus::Done => "done",
+            AgentStatus::Unknown => "unknown",
+        }
+    }
+}
+
+/// One herdr pane whose working directory is inside a checkout. `cwd` is the
+/// pane's shell cwd or its foreground process's cwd, whichever matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Occupant {
+    pub pane_id: String,
+    pub cwd: PathBuf,
 }
 
 /// Everything one scan found, grouped by repo in the order the repos were

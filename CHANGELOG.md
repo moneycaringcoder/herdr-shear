@@ -18,8 +18,41 @@ All notable changes to this project are documented here. The format follows
   pane removes something the user did not mean. A rescan that fails leaves the
   pane exactly as it was, still showing the previous scan, and says so. Disk
   sizes are re-measured behind the rendering, exactly as on open.
+
+- The open-workspace sentence now says when the workspace's agent is mid-task:
+  "open in the herdr workspace X, where an agent is still working" (or "where
+  an agent is waiting for input"). The sentence is the row's reason, so it
+  reaches the review pane's detail line, the signals, and `--json`'s `reason`.
+  Only those two states are said — idle, done, and unknown add nothing a user
+  would act on. The status comes from the `session.snapshot` shear already
+  reads. `--json`'s `open_workspace` object gains an `agent_status` field —
+  `null` when herdr did not say, or said a state this build does not know —
+  and the upstream canary's contract pins the field.
+
+- A new `occupied` class: a herdr pane whose working directory is inside a
+  checkout, when that pane is not one a removal would close — the panes of a
+  workspace holding the checkout open are excepted, because herdr's
+  `worktree.remove` closes them with it. `open_workspace_id` cannot see this
+  occupancy — a shell that merely `cd`-ed into a worktree from another
+  workspace — and removing the checkout would yank that pane's directory out
+  from under it, so an occupied row is `blocked` and every removal path
+  refuses it. No flag overrides the refusal; the sentence names the pane and
+  where it is sitting, and the unblocking action is the user's: close the
+  pane, or move it elsewhere. Occupancy comes from the same `session.snapshot`
+  shear already reads (its `panes` array, present since herdr 0.8.0, so the
+  version floor is unchanged), and it only ever narrows: when herdr is
+  unreachable, occupancy is unknown and nothing is blocked by it, exactly as
+  workspaces are already invisible then — and the scan's note now says so.
+  `--json` rows gain an `occupants` array naming each pane and its directory,
+  and the upstream canary's contract now pins the `panes` surface too.
 ### Fixed
 
+- Open-workspace rows are now joined to the session snapshot by workspace id
+  rather than by checkout path. A workspace can arrive in the snapshot with no
+  `worktree` key while `worktree.list` reports it holding a checkout open —
+  verified live — and the path join then found nothing, so the row's workspace
+  fell back to its bare id ("workspace w1X" instead of its label) and, now,
+  would also have lost its agent status.
 - `space` in the review pane now refuses a `blocked` row instead of selecting
   it and warning that the removal would be refused. The changelog for 0.1.1
   already said a protected row "cannot be selected"; now that is true, and it

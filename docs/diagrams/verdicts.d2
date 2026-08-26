@@ -65,13 +65,13 @@ wt: "one worktree" {
 }
 
 main: "is it the main checkout?" { class: q }
-lock: "locked, or open in herdr?" { class: q }
+lock: "locked, open in herdr,\nor a pane inside?" { class: q }
 dirt: "uncommitted changes?" { class: q }
 dead: "merged AND upstream gone?" { class: q }
 signal: "any death signal?\nmerged, gone, stale, prunable" { class: q }
 
 b1: "blocked\nno override exists" { class: blocked }
-b2: "blocked\nunlock it, or close the workspace" { class: blocked }
+b2: "blocked\nunlock it, close the workspace,\nor move the pane out" { class: blocked }
 r1: "review\nnever preselected" { class: review }
 r2: "review\npick it yourself" { class: review }
 s: "safe\nthe only class a bulk\naction may preselect" { class: safe }

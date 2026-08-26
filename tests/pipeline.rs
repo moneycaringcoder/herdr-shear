@@ -311,3 +311,76 @@ fn a_user_supplied_path_resolves_through_a_symlink_and_a_trailing_dot() {
         "an unknown path must not resolve to something"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The occupancy join
+// ---------------------------------------------------------------------------
+
+fn pane(pane_id: &str, cwd: Option<&str>, foreground_cwd: Option<&str>) -> shear::herdr::PaneCwd {
+    shear::herdr::PaneCwd {
+        pane_id: pane_id.into(),
+        workspace_id: pane_id.split(':').next().map(str::to_string),
+        cwd: cwd.map(PathBuf::from),
+        foreground_cwd: foreground_cwd.map(PathBuf::from),
+    }
+}
+
+#[test]
+fn occupancy_is_component_wise_and_never_matches_a_sibling_prefix() {
+    let panes = [
+        // Inside: the checkout itself, and a directory below it.
+        pane("w1:p1", Some("/scratch/wt"), None),
+        pane("w1:p2", Some("/scratch/wt/src/deep"), None),
+        // Outside: a sibling whose name merely starts with the checkout's, the
+        // parent, and an unrelated tree. `/scratch/wt-2` is the case a string
+        // prefix match would get wrong.
+        pane("w2:p1", Some("/scratch/wt-2"), None),
+        pane("w2:p2", Some("/scratch"), None),
+        pane("w2:p3", Some("/elsewhere/wt"), None),
+    ];
+    let occupants = pipeline::occupants_of(Path::new("/scratch/wt"), &panes, None);
+    let ids: Vec<&str> = occupants.iter().map(|o| o.pane_id.as_str()).collect();
+    assert_eq!(ids, ["w1:p1", "w1:p2"]);
+}
+
+#[test]
+fn the_foreground_cwd_is_preferred_and_either_cwd_counts() {
+    // The shell sits at the repo root while its foreground process works inside
+    // the checkout — the case `cwd` alone would miss.
+    let foreground_only = [pane("w1:p1", Some("/scratch"), Some("/scratch/wt/build"))];
+    let occupants = pipeline::occupants_of(Path::new("/scratch/wt"), &foreground_only, None);
+    assert_eq!(occupants.len(), 1);
+    assert_eq!(occupants[0].cwd, PathBuf::from("/scratch/wt/build"));
+
+    // Both inside: the foreground process's cwd is the one recorded, because it
+    // names what is actually running there.
+    let both = [pane("w1:p1", Some("/scratch/wt"), Some("/scratch/wt/src"))];
+    let occupants = pipeline::occupants_of(Path::new("/scratch/wt"), &both, None);
+    assert_eq!(occupants[0].cwd, PathBuf::from("/scratch/wt/src"));
+}
+
+#[test]
+fn the_holding_workspaces_own_panes_are_excepted_and_nobody_elses_are() {
+    // w1 holds the checkout open; removing it through herdr closes w1's panes
+    // with it. The pane from w2 would be left standing in a deleted directory,
+    // so it occupies even though a workspace holds the checkout open.
+    let panes = [
+        pane("w1:p1", Some("/scratch/wt"), None),
+        pane("w1:p2", Some("/scratch/wt/src"), None),
+        pane("w2:p1", Some("/scratch/wt/deep"), None),
+    ];
+    let occupants = pipeline::occupants_of(Path::new("/scratch/wt"), &panes, Some("w1"));
+    let ids: Vec<&str> = occupants.iter().map(|o| o.pane_id.as_str()).collect();
+    assert_eq!(ids, ["w2:p1"]);
+
+    // A pane herdr could not attribute to a workspace is never excepted: an
+    // unattributable pane still breaks when the directory goes.
+    let unattributed = [shear::herdr::PaneCwd {
+        pane_id: "p9".into(),
+        workspace_id: None,
+        cwd: Some(PathBuf::from("/scratch/wt")),
+        foreground_cwd: None,
+    }];
+    let occupants = pipeline::occupants_of(Path::new("/scratch/wt"), &unattributed, Some("w1"));
+    assert_eq!(occupants.len(), 1);
+}

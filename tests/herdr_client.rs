@@ -18,6 +18,10 @@ use std::thread::JoinHandle;
 
 use serde_json::{json, Value};
 use shear::herdr::{self, Herdr};
+use shear::model::AgentStatus;
+
+#[path = "fixtures.rs"]
+mod fixtures;
 
 // ---------------------------------------------------------------------------
 // A real server, one request per connection
@@ -233,14 +237,15 @@ fn assert_wire(raw: &str, method: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn session_repos_reads_the_arrays_from_result_snapshot() {
+fn session_view_reads_the_arrays_from_result_snapshot() {
     let server = Server::new(
         "snapshot",
         vec![Some(line(&capture("session-snapshot.json")))],
     );
     let (_guard, mut client) = server.client();
 
-    let repos = client.session_repos().expect("read the session");
+    let view = client.session_view().expect("read the session");
+    let repos = view.repos;
 
     let request = assert_wire(&server.requests()[0], "session.snapshot");
     assert_eq!(
@@ -277,6 +282,148 @@ fn session_repos_reads_the_arrays_from_result_snapshot() {
         "every checkout the session holds open, grouped under one repo"
     );
     assert_eq!(crescendo.open[1].1.label, "media-throughput");
+
+    // Every pane arrives with both working directories, and the two are kept
+    // apart: the shell's cwd and the foreground process's cwd are different
+    // facts, and the capture's first pane proves it by having different ones.
+    assert_eq!(view.panes.len(), 10, "every pane in the capture");
+    let first = &view.panes[0];
+    assert_eq!(first.pane_id, "wM:p1");
+    assert_eq!(first.workspace_id.as_deref(), Some("wM"));
+    assert_eq!(first.cwd.as_deref(), Some(Path::new("/home/you/repos")));
+    assert_eq!(
+        first.foreground_cwd.as_deref(),
+        Some(Path::new(
+            "/home/you/.local/share/mise/installs/node/24.18.0/lib/node_modules/pyright/dist"
+        ))
+    );
+
+    // The agent status rides along: w6's agent is working, wE's is idle, and
+    // herdr-collide's own `unknown` is a reported state, not an absence.
+    assert_eq!(crescendo.open[0].1.agent_status, Some(AgentStatus::Working));
+    assert_eq!(crescendo.open[1].1.agent_status, Some(AgentStatus::Idle));
+    assert_eq!(repos[1].open[0].1.agent_status, Some(AgentStatus::Unknown));
+
+    // Every workspace appears in the summaries, including the four with no
+    // `worktree` key — a workspace can hold a checkout open while arriving
+    // that way, and the id join is what still names it then.
+    assert_eq!(view.workspaces.len(), 8, "every workspace in the capture");
+    let shear = view
+        .workspaces
+        .iter()
+        .find(|w| w.workspace_id == "w15")
+        .expect("w15 has no worktree key and must still be summarized");
+    assert_eq!(shear.label, "shear");
+    assert_eq!(shear.agent_status, Some(AgentStatus::Working));
+}
+
+#[test]
+fn an_open_checkout_is_named_through_the_id_join_when_the_snapshot_has_no_worktree_key() {
+    // The regression that took a live session to notice: a workspace can
+    // arrive in the snapshot with no `worktree` key while `worktree.list`
+    // reports it holding a checkout open. A path join finds nothing then, and
+    // the row's workspace falls back to its bare id and loses its agent
+    // status. The id join is what this test holds in place.
+    fixtures::pin_git_env();
+    let fixture = fixtures::Fixture::new("id-join");
+    let worktree = fixture.active_worktree("held-open");
+
+    let snapshot = json!({
+        "id": "shear:1",
+        "result": {
+            "type": "session_snapshot",
+            "snapshot": {
+                "workspaces": [
+                    {"workspace_id": "w15", "label": "shear",
+                     "agent_status": "working", "worktree": null},
+                ],
+                "panes": [],
+            },
+        },
+    });
+    let worktree_list = json!({
+        "id": "shear:2",
+        "result": {
+            "type": "worktree_list",
+            "worktrees": [
+                {"path": worktree.to_string_lossy(), "open_workspace_id": "w15"},
+            ],
+        },
+    });
+    let server = Server::new(
+        "id-join",
+        vec![Some(line(&snapshot)), Some(line(&worktree_list))],
+    );
+    // Holds the env guard so no other test repoints the socket mid-scan.
+    let (_guard, _client) = server.client();
+
+    let config = shear::config::Config {
+        only_repos: vec![fixture.repo.clone()],
+        integration_ref: Some("main".into()),
+        ..shear::config::Config::default()
+    };
+    let inventory = shear::shear::scan(&config).expect("scan against the fake herdr");
+    let candidate = inventory
+        .find(&worktree)
+        .expect("the held-open worktree is in the inventory");
+
+    let open = candidate
+        .open_workspace
+        .as_ref()
+        .expect("worktree.list said w15 holds it open");
+    assert_eq!(open.label, "shear", "named through the id join, not `w15`");
+    assert_eq!(open.agent_status, Some(AgentStatus::Working));
+    assert!(
+        candidate.reason.contains("workspace shear")
+            && candidate.reason.contains("an agent is still working"),
+        "and the sentence carries both: {}",
+        candidate.reason
+    );
+}
+
+#[test]
+fn pane_reading_treats_empty_as_absent_and_never_drops_a_placeable_pane() {
+    // herdr reports absent context as an empty string, never a missing key, so
+    // the empty string must arrive as `None`. A pane with neither directory can
+    // occupy nothing and is dropped; a pane with a directory but no id is kept
+    // under a placeholder, because an unnameable occupant is still an occupant
+    // and dropping it would widen what can be removed.
+    let reply = json!({
+        "id": "shear:1",
+        "result": {
+            "type": "session_snapshot",
+            "snapshot": {
+                "workspaces": [],
+                "panes": [
+                    {"pane_id": "w1:p1", "workspace_id": "w1",
+                     "cwd": "", "foreground_cwd": "/scratch/wt"},
+                    {"pane_id": "w1:p2", "workspace_id": "w1",
+                     "cwd": "", "foreground_cwd": ""},
+                    {"workspace_id": "w2", "cwd": "/scratch/wt/deep"},
+                ],
+            },
+        },
+    });
+    let server = Server::new("snapshot-pane-rules", vec![Some(line(&reply))]);
+    let (_guard, mut client) = server.client();
+
+    let panes = client.session_view().expect("read the session").panes;
+    assert_eq!(
+        panes.len(),
+        2,
+        "the pane with no directory at all is dropped"
+    );
+
+    assert_eq!(panes[0].pane_id, "w1:p1");
+    assert_eq!(panes[0].cwd, None, "an empty string is absence, not a path");
+    assert_eq!(
+        panes[0].foreground_cwd.as_deref(),
+        Some(Path::new("/scratch/wt"))
+    );
+
+    assert_eq!(panes[1].pane_id, "(pane with no id)");
+    assert_eq!(panes[1].workspace_id.as_deref(), Some("w2"));
+    assert_eq!(panes[1].cwd.as_deref(), Some(Path::new("/scratch/wt/deep")));
 }
 
 #[test]
@@ -298,7 +445,7 @@ fn a_reply_with_no_snapshot_key_is_a_loud_error_and_not_an_empty_session() {
     let (_guard, mut client) = server.client();
 
     let err = client
-        .session_repos()
+        .session_view()
         .expect_err("a missing `snapshot` key must be an error, not an empty session");
     let message = err.to_string();
     assert!(
@@ -340,7 +487,7 @@ fn a_checkout_path_ending_in_a_dot_still_joins_against_gits_absolute_path() {
 
     let server = Server::new("snapshot-dot", vec![Some(line(&captured))]);
     let (_guard, mut client) = server.client();
-    let repos = client.session_repos().expect("read the session");
+    let repos = client.session_view().expect("read the session").repos;
 
     let collide = repos
         .iter()
