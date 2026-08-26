@@ -415,3 +415,35 @@ fn the_cache_survives_corruption_and_sheds_paths_that_are_gone() {
         "the corrupt line is not carried forward: {written}"
     );
 }
+
+#[test]
+fn a_run_that_never_finished_measuring_keeps_the_older_figure() {
+    let _guard = env_lock();
+    no_herdr();
+
+    let fixture = Fixture::new("size-cache-quick-quit");
+    let worktree = fixture.active_worktree("kept-figure");
+    let cache = fixture.root().join("sizes.jsonl");
+
+    // A finished run remembers its figure.
+    let mut measured = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+    disk::measure_all(&mut measured, &AtomicBool::new(false));
+    let Size::Bytes(bytes) = measured.find(&worktree).expect("row").size else {
+        panic!("the walk must have measured the worktree");
+    };
+    disk::remember(&measured, &cache);
+
+    // A quick open-and-quit: every row still pending or provisional, nothing
+    // measured. Writing the cache back must not lose the older figure.
+    let mut unfinished = pipeline::scan(&config_for(&fixture.repo)).expect("rescan");
+    disk::recall(&mut unfinished, &cache);
+    disk::remember(&unfinished, &cache);
+
+    let mut third = pipeline::scan(&config_for(&fixture.repo)).expect("third scan");
+    disk::recall(&mut third, &cache);
+    assert_eq!(
+        third.find(&worktree).expect("row").size,
+        Size::Provisional(bytes),
+        "the figure survives a run that never finished measuring"
+    );
+}

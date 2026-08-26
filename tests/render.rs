@@ -237,6 +237,19 @@ fn full_inventory() -> Inventory {
             .size(Size::Bytes(716_800))
             .reason("nothing suggests this is dead")
             .build(),
+            // Provisional: last run's figure, drawn while the walk re-measures.
+            // It renders marked and counts as unmeasured, never in a total.
+            Row::branch(
+                LONG,
+                "/home/dev/repos/very-long-name-for-a-repository/worktrees/migration",
+                "chore/data-migration",
+            )
+            .verdict(Verdict::Keep)
+            .merged(Merged::No("origin/main".into()))
+            .days_old(1)
+            .size(Size::Provisional(1_310_000_000))
+            .reason("nothing suggests this is dead")
+            .build(),
         ],
         notes: vec![
             "herdr is not reachable (no socket at /run/herdr.sock); worktrees held open by a \
@@ -312,24 +325,25 @@ fn widths_of(text: &str) -> Vec<usize> {
 
 /// Eighty columns is the width a pane is judged at, so this is the one place
 /// the whole table is pinned character for character: every verdict, every
-/// class, all four size states and all three merged states in one frame.
+/// class, all five size states and all three merged states in one frame.
 #[test]
 fn the_table_at_eighty_columns_is_pinned() {
-    let expected = "  verdict classes        age   disk branch           path
+    let expected = "  verdict classes        age    disk branch           path
 
 repo app  /home/dev/repos/app
-  safe    gone,merged     3w 1.2 GB feature/login    \u{2026}repos/app-wt/feature-login
-  review  prunable,gone   9d      - chore/deps       \u{2026}ev/repos/app-wt/chore-deps
+  safe    gone,merged     3w  1.2 GB feature/login    \u{2026}epos/app-wt/feature-login
+  review  prunable,gone   9d       - chore/deps       \u{2026}v/repos/app-wt/chore-deps
       gitdir file points to non-existent location
-  review  dirty,stale    2mo  48 MB hotfix/payments  \u{2026}pos/app-wt/hotfix-payments
-  keep    merged?          -      \u{2026} (detached)       \u{2026}me/dev/repos/app-wt/bisect
-  blocked                 2d 120 MB main             /home/dev/repos/app
-  blocked open            3d 295 MB review/ui        \u{2026}dev/repos/app-wt/review-ui
-  blocked locked,stale   5mo      ? spike/wasm       \u{2026}ev/repos/app-wt/spike-wasm
+  review  dirty,stale    2mo   48 MB hotfix/payments  \u{2026}os/app-wt/hotfix-payments
+  keep    merged?          -       \u{2026} (detached)       \u{2026}e/dev/repos/app-wt/bisect
+  blocked                 2d  120 MB main             /home/dev/repos/app
+  blocked open            3d  295 MB review/ui        \u{2026}ev/repos/app-wt/review-ui
+  blocked locked,stale   5mo       ? spike/wasm       \u{2026}v/repos/app-wt/spike-wasm
 
 repo very-long-name-for-a-repository  \u{2026}dev/repos/very-long-name-for-a-repository
-  review  merged         8mo 2.5 GB release/2026-01\u{2026} \u{2026}/2026-01-release-candidate
-  keep                   12h 700 kB feature/a-branc\u{2026} \u{2026}repository/worktrees/spike
+  review  merged         8mo  2.5 GB release/2026-01\u{2026} \u{2026}2026-01-release-candidate
+  keep                    1d ~1.2 GB chore/data-migr\u{2026} \u{2026}itory/worktrees/migration
+  keep                   12h  700 kB feature/a-branc\u{2026} \u{2026}epository/worktrees/spike
 
 merged? — shear could not ask whether that worktree's commit is contained in the
   integration ref: no integration ref resolved in the repository, or the
@@ -347,12 +361,12 @@ notes
 #[test]
 fn the_summary_at_eighty_columns_is_pinned() {
     let expected = "\
-9 worktrees in 2 repositories: 1 safe worktree, 3 review, 2 keep, 3 blocked.
-Removing the 1 safe worktree would reclaim 1.2 GB of the 4.1 GB all 9 worktrees
+10 worktrees in 2 repositories: 1 safe worktree, 3 review, 3 keep, 3 blocked.
+Removing the 1 safe worktree would reclaim 1.2 GB of the 4.1 GB all 10 worktrees
 occupy.
-2 worktrees could not be measured, so that figure is a floor, not an estimate.
+3 worktrees are not measured, so that figure is a floor, not an estimate.
   app: 7 worktrees, 1 safe · 1.2 GB reclaimable of 1.6 GB+ (2 unmeasured)
-  very-long-name-f\u{2026}: 2 worktrees, 0 safe · nothing safe to remove · 2.5 GB total
+  \u{2026}: 3 worktrees, 0 safe · nothing safe to remove · 2.5 GB+ total (1 unmeasured)
 Removing a worktree leaves its branch and every commit on it intact: only the
 checkout goes.
 ";
@@ -651,12 +665,13 @@ fn rows_are_grouped_by_repository_and_never_mixed() {
 fn the_summary_counts_the_rows_it_could_not_measure() {
     let inventory = full_inventory();
     let rendered = summary(&inventory, 100);
-    assert!(rendered.contains("9 worktrees in 2 repositories"));
+    assert!(rendered.contains("10 worktrees in 2 repositories"));
     assert!(rendered.contains("1 safe worktree"));
-    // Two rows are unmeasured (pending and failed); `Gone` is measured and
+    // Three rows are unmeasured (pending, failed, and provisional — a figure
+    // from last run is a claim, not a measurement); `Gone` is measured and
     // reclaims nothing.
     assert!(
-        rendered.contains("2 worktrees could not be measured"),
+        rendered.contains("3 worktrees are not measured"),
         "the summary says how many are missing rather than undercounting quietly: {rendered}"
     );
     assert!(rendered.contains("floor"), "and calls the total a floor");

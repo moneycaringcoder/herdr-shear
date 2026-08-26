@@ -350,9 +350,12 @@ Four things a size column must not do, and does not:
   measurement.
 
 Totals only add up rows that were actually measured, and the summary says how
-many were not — "2 worktrees could not be measured, so that figure is a floor,
+many were not — "2 worktrees are not measured, so that figure is a floor,
 not an estimate" — rather than quietly undercounting. Byte figures are truncated
 rather than rounded, so the number never overstates what you get back.
+
+Last run's figures live in `sizes.jsonl` next to the undo log; deleting that
+file costs nothing but one run's provisional figures.
 
 ### The table is sized from its content, and never overflows
 

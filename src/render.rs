@@ -347,15 +347,17 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
     if total_unknown > 0 {
         let unmeasured = if safe_unknown > 0 && safe_rows > 0 {
             format!(
-                "{} could not be measured ({} of them safe), so both figures are floors, not \
+                "{} {} not measured ({} of them safe), so both figures are floors, not \
                  estimates.",
                 plural(total_unknown, "worktree", "worktrees"),
+                if total_unknown == 1 { "is" } else { "are" },
                 safe_unknown,
             )
         } else {
             format!(
-                "{} could not be measured, so that figure is a floor, not an estimate.",
+                "{} {} not measured, so that figure is a floor, not an estimate.",
                 plural(total_unknown, "worktree", "worktrees"),
+                if total_unknown == 1 { "is" } else { "are" },
             )
         };
         push_wrapped(&mut out, "", "", &unmeasured, width);

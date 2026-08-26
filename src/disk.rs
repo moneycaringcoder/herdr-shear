@@ -244,11 +244,15 @@ pub fn remember(inventory: &Inventory, cache: &Path) {
     if let Some(parent) = cache.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Atomic: a pane torn down mid-write must not leave half a file for the
-    // next open to trip over.
-    let tmp = cache.with_extension("jsonl.tmp");
-    if std::fs::write(&tmp, body).is_ok() {
-        let _ = std::fs::rename(&tmp, cache);
+    // Atomic, and per-process: a pane torn down mid-write must not leave half
+    // a file for the next open to trip over, and two panes closing at once
+    // must not share a scratch file — a shared one lets pane B's truncation be
+    // published by pane A's rename, which is an emptied cache rather than the
+    // last-writer-wins this is content with.
+    let tmp = cache.with_extension(format!("jsonl.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, cache).is_err() {
+        // A failed rename must not strand scratch files in the state dir.
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
