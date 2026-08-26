@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `R` in the review pane rescans: git and herdr are re-read without touching
+  anything, for the moment a fetch, a merge, or a branch deletion elsewhere
+  changes the answer mid-review. Quitting and reopening the pane was the only
+  way to get a fresh scan before. The selection follows the worktrees by path
+  rather than by row number; a selected row that is gone, or that the new scan
+  calls blocked, drops out of the selection and the pane says how many were
+  dropped — silently keeping a selection on a row whose facts changed is how a
+  pane removes something the user did not mean. A rescan that fails leaves the
+  pane exactly as it was, still showing the previous scan, and says so. Disk
+  sizes are re-measured behind the rendering, exactly as on open.
+
 ## [0.1.1] - 2026-08-18
 
 ### Added

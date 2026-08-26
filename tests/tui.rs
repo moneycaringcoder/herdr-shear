@@ -6,14 +6,14 @@
 //! confirmations for a dirty removal and the one that ends in `q`.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use shear::model::{
     Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, Repo, RepoKey, Size,
     Upstream, Verdict, Worktree,
 };
-use shear::tui::{apply, decode, for_raw_terminal, frame, Key, Mode, Review};
+use shear::tui::{adopt, apply, decode, for_raw_terminal, frame, Key, Mode, Review};
 
 // ---------------------------------------------------------------------------
 // Hand-built inventory
@@ -195,6 +195,8 @@ const MAIN: usize = 0;
 const SAFE_A: usize = 1;
 const SAFE_B: usize = 2;
 const DIRTY_REVIEW: usize = 5;
+const SAFE_A_PATH: &str = "/home/dev/repos/app-wt/feature-login";
+const SAFE_B_PATH: &str = "/home/dev/repos/app-wt/chore-deps";
 
 fn review() -> Review {
     Review::new(inventory())
@@ -822,7 +824,7 @@ chore-deps: safe
 Selected the 2 safe worktrees, and nothing else.
 Removing a worktree leaves its branch and every commit on it intact: only the
 checkout goes.
-\u{2191}/k up  \u{2193}/j down  space select  a safe rows  n none  r remove  q quit
+\u{2191}/k up  \u{2193}/j down  space select  a safe rows  n none  r remove  R rescan  q quit
 ";
     assert_eq!(
         frame(&drive(review(), &[Key::SelectSafe]), 80, 24),
@@ -860,7 +862,7 @@ Enter. Esc cancels.
 files at risk: 12    typed: 1_
 Removing a worktree leaves its branch and every commit on it intact: only the
 checkout goes.
-\u{2191}/k up  \u{2193}/j down  space select  a safe rows  n none  r remove  q quit
+\u{2191}/k up  \u{2193}/j down  space select  a safe rows  n none  r remove  R rescan  q quit
 ";
     assert_eq!(frame(&drive(with_a_dirty_row(), &keys), 80, 24), expected);
 }
@@ -880,12 +882,13 @@ fn arrow_keys_are_not_mistaken_for_escape() {
 #[test]
 fn every_documented_key_decodes() {
     assert_eq!(
-        decode(b" anrq\r\x7f5"),
+        decode(b" anrRq\r\x7f5"),
         vec![
             Key::Toggle,
             Key::SelectSafe,
             Key::SelectNone,
             Key::Remove,
+            Key::Rescan,
             Key::Quit,
             Key::Confirm,
             Key::Backspace,
@@ -894,6 +897,89 @@ fn every_documented_key_decodes() {
     );
     assert_eq!(decode(b""), Vec::new());
     assert_eq!(decode(b"\x1b[Z"), vec![Key::Other]);
+}
+
+// ---------------------------------------------------------------------------
+// Rescanning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn capital_r_asks_for_a_rescan_and_only_while_browsing() {
+    let after = drive(review(), &[Key::Rescan]);
+    assert_eq!(after.mode, Mode::Rescanning, "the driver owns the rescan");
+
+    // Mid-confirmation, `R` is not a rescan: a stray key must never dismiss
+    // the question being asked.
+    let mut state = review();
+    state.cursor = DIRTY_REVIEW;
+    let confirming = drive(
+        state,
+        &[Key::Toggle, Key::Remove, Key::Confirm, Key::Rescan],
+    );
+    assert!(
+        matches!(confirming.mode, Mode::ConfirmDirty { .. }),
+        "still confirming: {:?}",
+        confirming.mode
+    );
+}
+
+#[test]
+fn a_rescan_carries_the_selection_and_the_cursor_by_path_not_by_index() {
+    let mut state = drive(review(), &[Key::SelectSafe]);
+    state.cursor = DIRTY_REVIEW;
+
+    // The new scan reverses the table, so every index means something else.
+    let mut rescanned = inventory();
+    rescanned.candidates.reverse();
+    let after = adopt(state, rescanned);
+
+    let selected_paths: BTreeSet<&str> = after
+        .selection()
+        .map(|candidate| candidate.worktree.path.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        selected_paths,
+        BTreeSet::from([
+            "/home/dev/repos/app-wt/feature-login",
+            "/home/dev/repos/app-wt/chore-deps",
+        ]),
+        "the same worktrees stay selected whatever their new indices are"
+    );
+    assert_eq!(
+        after.inventory.candidates[after.cursor].worktree.path,
+        PathBuf::from("/home/dev/repos/app-wt/hotfix-payments"),
+        "the cursor follows its row"
+    );
+    assert_eq!(after.mode, Mode::Browsing);
+    assert!(after.messages.iter().any(|m| m == "Rescanned."));
+}
+
+#[test]
+fn a_rescan_drops_selected_rows_that_are_gone_or_newly_blocked_and_says_so() {
+    let state = drive(review(), &[Key::SelectSafe]);
+
+    // The new scan lost one selected row entirely and calls the other blocked
+    // — somebody opened a workspace on it between the two scans.
+    let mut rescanned = inventory();
+    rescanned
+        .candidates
+        .retain(|candidate| candidate.worktree.path != Path::new(SAFE_A_PATH));
+    for candidate in rescanned.candidates.iter_mut() {
+        if candidate.worktree.path == Path::new(SAFE_B_PATH) {
+            candidate.verdict = Verdict::Blocked;
+        }
+    }
+    let after = adopt(state, rescanned);
+
+    assert!(after.selected.is_empty(), "{:?}", after.selected);
+    assert!(
+        after
+            .messages
+            .iter()
+            .any(|m| m.contains("Dropped 2 selected worktrees")),
+        "the drop is said, not silent: {:?}",
+        after.messages
+    );
 }
 
 /// The regression test for the one bug this whole suite could not see.
