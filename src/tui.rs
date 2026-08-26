@@ -34,6 +34,7 @@ use crate::Result;
 ///   a            select every `safe` row (and nothing else, ever)
 ///   n            clear the selection
 ///   r            remove the selection, after confirming
+///   R            rescan: re-read git and herdr without touching anything
 ///   q / Esc      quit without removing anything
 ///   0-9          type the file count the dirty confirmation asks for
 /// ```
@@ -52,6 +53,7 @@ pub enum Key {
     Quit,
     Confirm,
     Cancel,
+    Rescan,
     Digit(u8),
     Backspace,
     Other,
@@ -90,6 +92,9 @@ pub enum Mode {
         worktrees: usize,
     },
     Removing,
+    /// A rescan is owed. Like [`Mode::Removing`], the driver owns this state:
+    /// [`apply`] never performs I/O, so it can only ask.
+    Rescanning,
     Done,
 }
 
@@ -172,8 +177,10 @@ pub fn preselectable(candidate: &crate::model::Candidate) -> bool {
         && !candidate.is(Class::Dirty)
         && !candidate.is(Class::Locked)
         && !candidate.is(Class::OpenInHerdr)
+        && !candidate.is(Class::Occupied)
         && candidate.worktree.locked.is_none()
         && candidate.open_workspace.is_none()
+        && candidate.occupants.is_empty()
         && !candidate.dirt.is_dirty()
 }
 
@@ -195,9 +202,10 @@ pub fn apply(mut review: Review, key: Key) -> Review {
             typed,
             worktrees,
         } => confirm_dirty(review, key, files, typed, worktrees),
-        // The driver owns these two: one is a removal in flight, the other is a
-        // pane that has already said its last word.
-        Mode::Removing | Mode::Done => review,
+        // The driver owns these three: one is a removal in flight, one is a
+        // rescan in flight, and the last is a pane that has already said its
+        // last word.
+        Mode::Removing | Mode::Rescanning | Mode::Done => review,
     }
 }
 
@@ -269,6 +277,10 @@ fn browsing(mut review: Review, key: Key) -> Review {
             review.messages.clear();
             review.selected.clear();
             review.messages.push("Selection cleared.".into());
+        }
+        Key::Rescan => {
+            review.messages.clear();
+            review.mode = Mode::Rescanning;
         }
         Key::Remove => {
             review.messages.clear();
@@ -385,8 +397,8 @@ fn confirm_dirty(
 // ---------------------------------------------------------------------------
 
 const TITLE: &str = "shear \u{b7} review worktrees";
-const HELP_WIDE: &str =
-    "\u{2191}/k up  \u{2193}/j down  space select  a safe rows  n none  r remove  q quit";
+const HELP_WIDE: &str = "\u{2191}/k up  \u{2193}/j down  space select  a safe rows  n none  \
+                         r remove  R rescan  q quit";
 const HELP_NARROW: &str = "\u{2191}\u{2193} move  space select  a safe  r remove  q quit";
 
 /// Renders the current state to a frame of exactly the given size.
@@ -513,7 +525,15 @@ fn foot_lines(review: &Review, width: usize, budget: usize) -> Vec<String> {
     // the user is deciding. It is never the block that gets dropped.
     blocks.push(render::wrap(render::SAFETY_NOTE, width));
     blocks.push(vec![
-        if width >= 72 { HELP_WIDE } else { HELP_NARROW }.to_string()
+        // Derived from the string, not a magic number, so growing the help can
+        // never leave a band of widths where it is silently clipped — and the
+        // part that gets cut is `q quit`, the documented way out.
+        if width >= render::display_width(HELP_WIDE) {
+            HELP_WIDE
+        } else {
+            HELP_NARROW
+        }
+        .to_string(),
     ]);
 
     let mut dropped: BTreeSet<usize> = BTreeSet::new();
@@ -683,6 +703,7 @@ fn mode_lines(review: &Review, width: usize) -> Vec<String> {
             lines
         }
         Mode::Removing => vec!["Removing\u{2026}".to_string()],
+        Mode::Rescanning => vec!["Rescanning\u{2026}".to_string()],
         Mode::Browsing | Mode::Done => review
             .messages
             .iter()
@@ -710,14 +731,32 @@ pub fn decode(bytes: &[u8]) -> Vec<Key> {
                 // `Esc [ A` and friends. A lone Esc is a cancel, so the two must
                 // never be confused: losing a selection to an arrow key would be
                 // exactly the mis-key an overlay pane exists to survive.
+                //
+                // The rest of an unrecognized CSI or SS3 sequence is consumed,
+                // never decoded byte by byte: F3 arrives as `Esc O R`, and a
+                // trailing byte that happens to be a binding must not act.
                 if bytes.get(index) == Some(&b'[') && index + 1 < bytes.len() {
-                    let final_byte = bytes[index + 1];
-                    index += 2;
+                    index += 1;
+                    // Parameter and intermediate bytes run to the first final
+                    // byte (0x40..=0x7e), which ends the sequence.
+                    let mut final_byte = 0u8;
+                    while index < bytes.len() {
+                        let candidate = bytes[index];
+                        index += 1;
+                        if (0x40..=0x7e).contains(&candidate) {
+                            final_byte = candidate;
+                            break;
+                        }
+                    }
                     match final_byte {
                         b'A' => Key::Up,
                         b'B' => Key::Down,
                         _ => Key::Other,
                     }
+                } else if bytes.get(index) == Some(&b'O') && index + 1 < bytes.len() {
+                    // SS3: one final byte follows.
+                    index += 2;
+                    Key::Other
                 } else {
                     Key::Cancel
                 }
@@ -728,6 +767,7 @@ pub fn decode(bytes: &[u8]) -> Vec<Key> {
             b'a' => Key::SelectSafe,
             b'n' => Key::SelectNone,
             b'r' => Key::Remove,
+            b'R' => Key::Rescan,
             b'q' => Key::Quit,
             b'y' | b'\r' | b'\n' => Key::Confirm,
             0x08 | 0x7f => Key::Backspace,
@@ -849,6 +889,12 @@ fn event_loop(
             dirty = true;
             continue;
         }
+        if review.mode == Mode::Rescanning {
+            review = rescan(review, config);
+            sizer = Sizer::start(&review.inventory, config);
+            dirty = true;
+            continue;
+        }
 
         for key in read_keys()? {
             review = apply(review, key);
@@ -907,6 +953,97 @@ fn perform(mut review: Review, config: &Config) -> Review {
         .unwrap_or(0);
     review.mode = Mode::Browsing;
     review.messages = messages;
+    review
+}
+
+/// Re-reads git and herdr without touching anything, keeping the selection.
+///
+/// A scan that fails leaves the pane exactly as it was: the previous
+/// inventory is still true of the world as last observed, and a rescan that
+/// destroyed a built-up selection on a transient error would make `R` a key
+/// nobody dares press.
+fn rescan(mut review: Review, config: &Config) -> Review {
+    match crate::shear::scan(config) {
+        Ok(inventory) => adopt(review, inventory),
+        Err(err) => {
+            review.mode = Mode::Browsing;
+            review.messages = vec![format!(
+                "could not rescan ({err}); showing the previous scan"
+            )];
+            review
+        }
+    }
+}
+
+/// Swaps in a fresh inventory, carrying the selection and the cursor across by
+/// path. Indices mean nothing across a rescan; paths do.
+///
+/// A selected row that is gone, or that the new scan calls blocked, drops out
+/// of the selection and is counted in the message — silently keeping a
+/// selection on a row whose facts changed is how a pane removes something the
+/// user did not mean.
+pub fn adopt(mut review: Review, inventory: Inventory) -> Review {
+    let selected_paths: Vec<PathBuf> = review
+        .selection()
+        .map(|candidate| candidate.worktree.path.clone())
+        .collect();
+    let cursor_path = review
+        .inventory
+        .candidates
+        .get(review.cursor)
+        .map(|candidate| candidate.worktree.path.clone());
+
+    review.inventory = inventory;
+
+    let mut dropped = 0usize;
+    review.selected = selected_paths
+        .iter()
+        .filter_map(|path| {
+            let index = review
+                .inventory
+                .candidates
+                .iter()
+                .position(|candidate| &candidate.worktree.path == path);
+            match index {
+                Some(index) if review.inventory.candidates[index].verdict != Verdict::Blocked => {
+                    Some(index)
+                }
+                _ => {
+                    dropped += 1;
+                    None
+                }
+            }
+        })
+        .collect();
+
+    review.cursor = cursor_path
+        .and_then(|path| {
+            review
+                .inventory
+                .candidates
+                .iter()
+                .position(|candidate| candidate.worktree.path == path)
+        })
+        .unwrap_or_else(|| {
+            display_order(&review.inventory)
+                .first()
+                .copied()
+                .unwrap_or(0)
+        });
+
+    review.mode = Mode::Browsing;
+    review.messages = if dropped == 0 {
+        vec!["Rescanned.".into()]
+    } else {
+        vec![format!(
+            "Rescanned. Dropped {dropped} selected {}: gone, or not removable.",
+            if dropped == 1 {
+                "worktree"
+            } else {
+                "worktrees"
+            }
+        )]
+    };
     review
 }
 

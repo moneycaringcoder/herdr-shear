@@ -15,14 +15,20 @@
 //!    [`Permissions::close_workspace`], and then only through
 //!    [`RemovalRoute::Herdr`], which closes the workspace as part of the
 //!    removal.
-//! 5. A dirty worktree is removable only with [`Permissions::force_dirty`],
+//! 5. A worktree a herdr pane is sitting in is never removable while the pane
+//!    is there — excepting the panes of a workspace holding it open, which the
+//!    herdr route closes as part of the removal. No flag overrides it: removing
+//!    the directory under a live process is not something a confirmation can
+//!    make safe, and the unblocking action — close the pane, or move it
+//!    elsewhere — is the user's to take.
+//! 6. A dirty worktree is removable only with [`Permissions::force_dirty`],
 //!    which itself requires the caller to have named the exact at-risk file
 //!    count. A confirmation that can be given without reading the number is not
 //!    a confirmation.
-//! 6. **Never `rm -rf`.** Removal is `worktree.remove` over the socket for a
+//! 7. **Never `rm -rf`.** Removal is `worktree.remove` over the socket for a
 //!    worktree herdr holds open, and `git worktree remove` otherwise. Both leave
 //!    the branch and every commit on it in place.
-//! 7. Every removal is appended to the undo log *before* it is attempted, so a
+//! 8. Every removal is appended to the undo log *before* it is attempted, so a
 //!    removal that half-succeeds is still recoverable.
 //!
 //! The git invocations that write live here rather than in `git.rs`. That
@@ -79,6 +85,12 @@ pub enum Refusal {
     OpenInHerdr {
         workspace: String,
         label: String,
+    },
+    /// A herdr pane's working directory is inside the checkout. Named so the
+    /// user can find the pane; no flag overrides it.
+    Occupied {
+        pane_id: String,
+        cwd: PathBuf,
     },
     Dirty {
         files: usize,
@@ -145,6 +157,13 @@ impl std::fmt::Display for Refusal {
                      or close it yourself first"
                 )
             }
+            Refusal::Occupied { pane_id, cwd } => write!(
+                f,
+                "herdr pane {pane_id} is working in {}. Removing the checkout would yank \
+                 that pane's directory out from under it, so no flag overrides this: close \
+                 the pane, or move it elsewhere, and run shear again",
+                cwd.display()
+            ),
             Refusal::Dirty { files } => write!(
                 f,
                 "the worktree has {files} uncommitted {} at risk. Pass --force-dirty \
@@ -201,6 +220,12 @@ pub fn check(candidate: &Candidate, permissions: Permissions) -> std::result::Re
                 label: open.label.clone(),
             });
         }
+    }
+    if let Some(occupant) = candidate.occupants.first() {
+        return Err(Refusal::Occupied {
+            pane_id: occupant.pane_id.clone(),
+            cwd: occupant.cwd.clone(),
+        });
     }
     if candidate.dirt.is_dirty() {
         let actual = candidate.dirt.total();
@@ -289,7 +314,7 @@ pub fn remove_one(
     let force = permissions.force_dirty && candidate.dirt.is_dirty();
     let record = record_for(candidate, route);
 
-    // Rule 6: the note goes down before the act, so a removal that half-succeeds
+    // Rule 8: the note goes down before the act, so a removal that half-succeeds
     // is still recoverable.
     if let Err(err) = append_log(&record) {
         eprintln!(
