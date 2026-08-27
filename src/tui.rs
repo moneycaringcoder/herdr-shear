@@ -71,6 +71,8 @@ pub struct Review {
     pub mode: Mode,
     /// Messages from the last action, shown under the table.
     pub messages: Vec<String>,
+    /// Undo warnings survive redraws, later actions, and pane exit.
+    pub undo_warnings: Vec<String>,
 }
 
 /// What the pane is currently asking.
@@ -109,6 +111,7 @@ impl Review {
             selected: BTreeSet::new(),
             mode: Mode::Browsing,
             messages: Vec::new(),
+            undo_warnings: Vec::new(),
         }
     }
 
@@ -300,7 +303,7 @@ fn browsing(mut review: Review, key: Key) -> Review {
         Key::Quit => {
             review.messages.clear();
             review.mode = Mode::Done;
-            review.messages.push("Quit. Nothing was removed.".into());
+            review.messages.push("Quit.".into());
         }
         Key::Confirm | Key::Cancel | Key::Digit(_) | Key::Backspace | Key::Other => {}
     }
@@ -670,13 +673,20 @@ fn selection_line(review: &Review) -> String {
 fn mode_lines(review: &Review, width: usize) -> Vec<String> {
     let messages = || {
         review
-            .messages
+            .undo_warnings
             .iter()
+            .rev()
+            .chain(review.messages.iter())
             .flat_map(|message| render::wrap(message, width))
             .collect::<Vec<_>>()
     };
+    let status = |text: &str| {
+        let mut lines = messages();
+        lines.push(text.to_string());
+        lines
+    };
     match &review.mode {
-        Mode::Preflighting => vec!["Refreshing selection\u{2026}".to_string()],
+        Mode::Preflighting => status("Refreshing selection\u{2026}"),
         Mode::ConfirmClean { count, bytes: _ } => {
             // Sizing continues behind the confirmation. Derive both figures
             // from the live inventory so a Pending row that settles cannot
@@ -753,8 +763,8 @@ fn mode_lines(review: &Review, width: usize) -> Vec<String> {
             lines.push(format!("files at risk: {files}    typed: {typed}_"));
             lines
         }
-        Mode::Removing => vec!["Removing\u{2026}".to_string()],
-        Mode::Rescanning => vec!["Rescanning\u{2026}".to_string()],
+        Mode::Removing => status("Removing\u{2026}"),
+        Mode::Rescanning => status("Rescanning\u{2026}"),
         Mode::Browsing | Mode::Done => messages(),
     }
 }
@@ -855,6 +865,16 @@ pub fn for_raw_terminal(frame: &str) -> String {
     frame.replace('\n', "\r\n")
 }
 
+/// Messages printed after raw mode is restored.
+#[doc(hidden)]
+pub fn exit_messages(review: &Review) -> impl Iterator<Item = &str> {
+    review
+        .undo_warnings
+        .iter()
+        .chain(review.messages.iter())
+        .map(String::as_str)
+}
+
 /// `--review`: the interactive verb.
 pub fn run_review(config: &Config) -> Result<()> {
     let mut inventory = crate::shear::scan(config)?;
@@ -893,7 +913,7 @@ pub fn run_review(config: &Config) -> Result<()> {
     // Printed after the terminal is back the way we found it, so the outcome
     // survives the pane closing.
     let (columns, _) = render::terminal_size();
-    for message in &review.messages {
+    for message in exit_messages(&review) {
         let mut line = String::new();
         render::push_wrapped(&mut line, "", "  ", message, columns.max(MIN_COLUMNS));
         print!("{line}");
@@ -913,7 +933,7 @@ fn event_loop(
 
     loop {
         if stop.load(Ordering::Relaxed) {
-            review.messages = vec!["Interrupted. Nothing was removed.".into()];
+            review.messages = vec!["Interrupted.".into()];
             return Ok(review);
         }
         if sizer.drain(&mut review.inventory) {
@@ -959,6 +979,33 @@ fn event_loop(
     }
 }
 
+/// Stores one successful removal's persistent warning and transient success.
+#[doc(hidden)]
+pub fn append_removal_messages(review: &mut Review, outcome: crate::remove::RemovalOutcome) {
+    if let Some(warning) = outcome.undo_warning {
+        review.undo_warnings.push(warning);
+    }
+    review.messages.push(format!(
+        "removed {} \u{2014} restore it with: {}",
+        outcome.record.path, outcome.record.restore_command
+    ));
+}
+
+/// Stores a route failure without losing an undo warning emitted before it.
+#[doc(hidden)]
+pub fn append_removal_failure(
+    review: &mut Review,
+    path: &std::path::Path,
+    failure: crate::remove::RemovalFailure,
+) {
+    if let Some(warning) = failure.undo_warning {
+        review.undo_warnings.push(warning);
+    }
+    review
+        .messages
+        .push(format!("{}: {}", path.display(), failure.message));
+}
+
 /// Carries out the removals the user has confirmed.
 ///
 /// The only way into this function is [`Mode::Removing`], and the only way into
@@ -966,7 +1013,7 @@ fn event_loop(
 /// Every guard in `remove::check` still runs underneath: this is the last of
 /// several gates, not the only one.
 fn perform(mut review: Review, config: &Config) -> Review {
-    let mut messages: Vec<String> = Vec::new();
+    review.messages.clear();
     let mut herdr = crate::herdr::Herdr::connect().ok();
     let selected: Vec<PathBuf> = review
         .selection()
@@ -975,7 +1022,9 @@ fn perform(mut review: Review, config: &Config) -> Review {
 
     for path in &selected {
         let Some(candidate) = review.inventory.find(path) else {
-            messages.push(format!("{}: no longer in the inventory", path.display()));
+            review
+                .messages
+                .push(format!("{}: no longer in the inventory", path.display()));
             continue;
         };
         let permissions = crate::remove::Permissions {
@@ -988,17 +1037,16 @@ fn perform(mut review: Review, config: &Config) -> Review {
             close_workspace: false,
         };
         match crate::remove::remove_one(candidate, permissions, herdr.as_mut(), config) {
-            Ok(record) => messages.push(format!(
-                "removed {} \u{2014} restore it with: {}",
-                record.path, record.restore_command
-            )),
-            Err(err) => messages.push(format!("{}: {err}", path.display())),
+            Ok(outcome) => append_removal_messages(&mut review, outcome),
+            Err(failure) => append_removal_failure(&mut review, path, failure),
         }
     }
 
     match crate::shear::scan(config) {
         Ok(inventory) => review.inventory = inventory,
-        Err(err) => messages.push(format!("could not rescan after removing: {err}")),
+        Err(err) => review
+            .messages
+            .push(format!("could not rescan after removing: {err}")),
     }
     review.selected.clear();
     // Indices mean nothing across a rescan, so the cursor goes back to the top
@@ -1008,7 +1056,6 @@ fn perform(mut review: Review, config: &Config) -> Review {
         .copied()
         .unwrap_or(0);
     review.mode = Mode::Browsing;
-    review.messages = messages;
     review
 }
 

@@ -10,10 +10,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use shear::model::{
-    Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, Repo, RepoKey, Size,
-    Upstream, Verdict, Worktree,
+    Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, RemovalRecord, Repo,
+    RepoKey, Size, Upstream, Verdict, Worktree,
 };
-use shear::tui::{adopt, apply, decode, for_raw_terminal, frame, preflight, Key, Mode, Review};
+use shear::remove::{RemovalFailure, RemovalOutcome};
+use shear::tui::{
+    adopt, append_removal_failure, append_removal_messages, apply, decode, exit_messages,
+    for_raw_terminal, frame, preflight, Key, Mode, Review,
+};
 
 // ---------------------------------------------------------------------------
 // Hand-built inventory
@@ -853,11 +857,7 @@ fn quitting_removes_nothing_however_far_the_session_got() {
         "the session never reached the one mode that removes anything: {modes:?}"
     );
     assert_eq!(review.mode, Mode::Done);
-    assert!(review.is_finished());
-    assert!(review
-        .messages
-        .iter()
-        .any(|m| m.contains("Nothing was removed")));
+    assert_eq!(review.messages, ["Quit."]);
 }
 
 #[test]
@@ -921,6 +921,160 @@ fn apply_is_total() {
 // ---------------------------------------------------------------------------
 // The frame
 // ---------------------------------------------------------------------------
+
+fn removal_record(path: &str, restore_command: &str) -> RemovalRecord {
+    RemovalRecord {
+        at: "2026-08-27T00:00:00Z".into(),
+        path: path.into(),
+        repo_root: REPO.into(),
+        branch: Some("feature/login".into()),
+        head_oid: Some("c0ffee".repeat(6) + "abcd"),
+        route: "git".into(),
+        classes: vec!["merged".into()],
+        verdict: "safe".into(),
+        bytes_reclaimed: Some(1_310_000_000),
+        restore_command: restore_command.into(),
+    }
+}
+
+#[test]
+fn logged_removal_keeps_the_existing_success_message_without_a_warning() {
+    let restore = format!("git -C {REPO} worktree add {SAFE_A_PATH} feature/login");
+    let mut state = review();
+    append_removal_messages(
+        &mut state,
+        RemovalOutcome {
+            record: removal_record(SAFE_A_PATH, &restore),
+            undo_warning: None,
+        },
+    );
+
+    assert!(state.undo_warnings.is_empty());
+    assert_eq!(
+        state.messages,
+        [format!(
+            "removed {SAFE_A_PATH} \u{2014} restore it with: {restore}"
+        )]
+    );
+}
+
+#[test]
+fn an_unlogged_removal_warning_and_full_restore_command_survive_every_redraw() {
+    let restore = format!("git -C {REPO} worktree add {SAFE_A_PATH} feature/login");
+    let warning = format!(
+        "shear: WARNING: no undo record could be written for {SAFE_A_PATH}: \
+         could not create /tmp/state-path-is-a-file: File exists (os error 17)\n\
+         shear: the removal is going ahead because you asked for it, but nothing will \
+         remember it. Keep this: {restore}"
+    );
+    let mut state = review();
+    append_removal_messages(
+        &mut state,
+        RemovalOutcome {
+            record: removal_record(SAFE_A_PATH, &restore),
+            undo_warning: Some(warning.clone()),
+        },
+    );
+
+    assert_eq!(
+        state.undo_warnings.as_slice(),
+        std::slice::from_ref(&warning)
+    );
+    for state in [
+        state.clone(),
+        apply(state.clone(), Key::SelectNone),
+        apply(state, Key::Quit),
+    ] {
+        let redrawn = frame(&state, 80, 24);
+        let rejoined = redrawn.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            rejoined.contains("WARNING")
+                && rejoined.contains("nothing will remember it")
+                && rejoined.contains(&restore),
+            "the 80-column redraw keeps the complete warning and restore command:\n{redrawn}"
+        );
+        assert_eq!(
+            state.undo_warnings.as_slice(),
+            std::slice::from_ref(&warning)
+        );
+    }
+
+    let mut quit = review();
+    append_removal_messages(
+        &mut quit,
+        RemovalOutcome {
+            record: removal_record(SAFE_A_PATH, &restore),
+            undo_warning: Some(warning.clone()),
+        },
+    );
+    let quit = apply(quit, Key::Quit);
+    let final_output = exit_messages(&quit).collect::<Vec<_>>().join("\n");
+    assert!(final_output.contains(&warning) && final_output.contains(&restore));
+    assert!(
+        !final_output.contains("Nothing was removed"),
+        "quit must not deny earlier removal work: {final_output}"
+    );
+}
+
+#[test]
+fn newest_of_multiple_warnings_survives_a_realistic_pane_and_exit_keeps_all() {
+    let mut state = review();
+    let mut restores = Vec::new();
+    for number in 1..=3 {
+        let path = format!("/home/dev/repos/app-wt/recovery-{number}");
+        let restore = format!("git -C {REPO} worktree add {path} feature/recovery-{number}");
+        let warning = format!(
+            "shear: WARNING: no undo record could be written for {path}: \
+             could not create /home/dev/.local/state/herdr/plugins/shear: Permission denied\n\
+             shear: the removal is going ahead because you asked for it, but nothing will \
+             remember it. Keep this: {restore}"
+        );
+        append_removal_messages(
+            &mut state,
+            RemovalOutcome {
+                record: removal_record(&path, &restore),
+                undo_warning: Some(warning),
+            },
+        );
+        restores.push(restore);
+    }
+
+    let redrawn = frame(&state, 80, 24);
+    let rejoined = redrawn.split_whitespace().collect::<Vec<_>>().join(" ");
+    let newest_restore = restores.last().expect("three restore commands");
+    assert!(
+        rejoined.contains(newest_restore.as_str()),
+        "the newest full restore command gets the scarce pane rows:\n{redrawn}"
+    );
+
+    let final_output = exit_messages(&state).collect::<Vec<_>>().join("\n");
+    for restore in &restores {
+        assert!(
+            final_output.contains(restore.as_str()),
+            "pane exit prints every persistent restore command: {final_output}"
+        );
+    }
+}
+
+#[test]
+fn a_failed_route_also_persists_its_pre_attempt_undo_warning() {
+    let restore = format!("git -C {REPO} worktree add {SAFE_A_PATH} feature/login");
+    let warning = format!("shear: WARNING: Keep this: {restore}");
+    let mut state = review();
+    append_removal_failure(
+        &mut state,
+        Path::new(SAFE_A_PATH),
+        RemovalFailure {
+            message: "git refused the removal".into(),
+            undo_warning: Some(warning.clone()),
+        },
+    );
+
+    assert_eq!(state.undo_warnings, [warning]);
+    assert!(state.messages.iter().any(|message| {
+        message.contains(SAFE_A_PATH) && message.contains("git refused the removal")
+    }));
+}
 
 #[test]
 fn the_frame_is_exactly_the_size_it_was_given() {

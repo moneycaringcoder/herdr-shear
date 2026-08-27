@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Undo-log write failures no longer disappear when the review pane redraws or
+  a removal route subsequently fails. The warning and full restore command
+  persist through later actions and pane exit alongside transient outcomes;
+  logged removals remain unchanged.
 - The review pane now refreshes selected worktrees before showing a removal
   confirmation. Its count and dirty-file acknowledgement come from the fresh
   scan; vanished or newly blocked rows drop out, and a failed refresh preserves

@@ -1,7 +1,7 @@
 //! Configuration, plugin identity, and the state/config directories herdr hands
 //! us. Read by every other module; changed by none of them.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::model::{Merged, Upstream};
@@ -370,9 +370,14 @@ pub fn config_dir() -> PathBuf {
         })
 }
 
-/// Append-only record of every removal shear has made.
+/// Append-only record of every removal shear successfully records.
 pub fn undo_log() -> PathBuf {
-    state_dir().join("removed.jsonl")
+    undo_log_in(&state_dir())
+}
+
+/// Undo-log path beneath an explicit state directory.
+pub fn undo_log_in(state_dir: &Path) -> PathBuf {
+    state_dir.join("removed.jsonl")
 }
 
 /// Last measured size per checkout, for the review pane's provisional first
