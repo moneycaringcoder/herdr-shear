@@ -10,6 +10,23 @@ use std::time::SystemTime;
 
 use crate::model::{Candidate, Class, Head, Merged, OpenWorkspace, Size, Verdict};
 use crate::model::{Dirt, Upstream, Worktree};
+/// How much Herdr workspace and pane visibility is available for this scope.
+///
+/// Standalone scans deliberately have no Herdr context and preserve the
+/// documented git-only safety rule. Once Herdr is expected or has answered,
+/// incomplete visibility can only narrow classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HerdrVisibility {
+    Standalone,
+    Complete,
+    Incomplete,
+}
+
+impl HerdrVisibility {
+    fn permits_safe(self) -> bool {
+        matches!(self, Self::Standalone | Self::Complete)
+    }
+}
 
 /// Everything known about one worktree at classification time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,11 +44,16 @@ pub struct Facts {
     /// as if it were.
     pub merged: Merged,
     pub last_commit: Option<SystemTime>,
+    /// Whether Herdr's workspace and pane view is complete for this worktree's
+    /// repository. This is an input to classification only: the resulting
+    /// verdict and reason carry the decision without duplicating mutable state
+    /// on [`Candidate`].
+    pub herdr_visibility: HerdrVisibility,
     pub open_workspace: Option<OpenWorkspace>,
-    /// herdr panes whose working directory is inside this checkout, excepting
-    /// the panes of a workspace holding it open. Empty when herdr is
-    /// unreachable — "unknown", not "unoccupied" — so absence never widens
-    /// what can be removed.
+    /// Herdr panes whose working directory is inside this checkout, excepting
+    /// the panes of a workspace holding it open. `herdr_visibility` distinguishes
+    /// a complete empty observation, a deliberately standalone scan, and an
+    /// incomplete observation that cannot satisfy the safe rule.
     pub occupants: Vec<crate::model::Occupant>,
     /// Protection pattern that matched the checkout path or branch name.
     pub protected: Option<String>,
@@ -51,8 +73,9 @@ pub struct Facts {
 /// - **Dirty** is at most `Review`, never `Safe`, and never preselected. The
 ///   reason names the file count at risk.
 /// - **Safe** requires all of: clean, merged into the integration ref, upstream
-///   gone, not protected, not open in herdr, not locked, not the main checkout.
-///   Every one of those must be a positive observation; an unanswerable question
+///   gone, not protected, not open in herdr, not locked, not the main checkout,
+///   and either complete Herdr visibility or a genuine standalone scan. Every
+///   one of those must be a positive observation; an unanswerable question
 ///   fails the test.
 /// - **Prunable** is `Review`, not `Safe`, even though it is clean by
 ///   construction. git's own reason for a prunable worktree is usually "gitdir
@@ -212,10 +235,10 @@ fn first_failed_safe_condition(candidate: &Candidate) -> String {
         return "not safe: the checkout is not on a branch".to_string();
     }
 
-    // A hand-built `Candidate` can carry a verdict that disagrees with its
-    // facts. Production candidates come through `classify`, but the explanation
-    // still must not omit the promised final entry for such a value.
-    "not safe: the verdict did not positively establish every safe condition".to_string()
+    // Production reaches this only when all git facts satisfy the safe rule but
+    // Herdr visibility was incomplete. The knowledge fact intentionally is not
+    // copied onto `Candidate`; the inventory note names the failed operation.
+    "not safe: complete herdr workspace and pane visibility was not established".to_string()
 }
 
 /// The set of classes a worktree carries. Split out from [`classify`] so the
@@ -297,7 +320,8 @@ pub fn verdict_of(facts: &Facts, classes: &std::collections::BTreeSet<Class>) ->
     // 4. Safe. Every condition is a positive observation, and every one of them
     //    is checked here rather than inferred from the class set alone, so that
     //    adding a class can never accidentally widen what is preselectable.
-    let safe = !classes.contains(&Class::Dirty)
+    let safe = facts.herdr_visibility.permits_safe()
+        && !classes.contains(&Class::Dirty)
         && facts.merged.is_merged()
         && facts.upstream.gone
         // A prunable worktree is clean and merged by construction, and its
@@ -352,6 +376,9 @@ pub fn reason_for(
     }
 
     let mut parts: Vec<String> = Vec::new();
+    if facts.herdr_visibility == HerdrVisibility::Incomplete {
+        parts.push("herdr workspace and pane visibility is incomplete".to_string());
+    }
     if classes.contains(&Class::Dirty) {
         parts.push(dirt_phrase(&facts.dirt));
     } else if verdict == Verdict::Safe {

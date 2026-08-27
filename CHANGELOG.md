@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Incomplete Herdr visibility can no longer produce a `safe` row: a failed
+  expected connection or `session.snapshot` demotes all affected worktrees,
+  while a failed `worktree.list` demotes only that repository. Dying rows remain
+  explicitly removable `review` rows, complete repositories remain eligible,
+  and genuine standalone scans keep their existing git-only behavior.
 - Dirty confirmations and `dirty_files` now count each at-risk path once when
   both its staged and unstaged states changed.
 - `--repo` now rejects a missing value instead of silently widening the scan or

@@ -3,12 +3,12 @@
 //! Every verb goes through [`scan`], so the review pane, the one-shot table
 //! and the JSON snapshot cannot drift into three subtly different answers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
-use crate::classify::{self, Facts};
+use crate::classify::{self, Facts, HerdrVisibility};
 use crate::config::{self, Config};
 use crate::disk;
 use crate::git;
@@ -24,27 +24,47 @@ use crate::Result;
 /// review pane fill pending sizes in behind the rendering.
 pub fn scan(config: &Config) -> Result<Inventory> {
     let mut inventory = Inventory::default();
+    let herdr_expected = config::non_empty_env("HERDR_PLUGIN_ID").is_some()
+        || config::non_empty_env("HERDR_SOCKET_PATH").is_some();
 
     // The herdr side is optional. Running the binary from a plain shell with
     // `--repo` is a supported way to use it, and a missing socket must degrade
     // to "no workspace information" with a note, never to an empty scan.
-    let mut client = match Herdr::connect() {
-        Ok(client) => Some(client),
+    let (mut client, initial_herdr_visibility) = match Herdr::connect() {
+        Ok(client) => (Some(client), HerdrVisibility::Complete),
         Err(err) => {
+            let visibility = if herdr_expected {
+                HerdrVisibility::Incomplete
+            } else {
+                HerdrVisibility::Standalone
+            };
+            let consequence = if herdr_expected {
+                "herdr workspace and pane visibility is incomplete, so no affected worktree \
+                 will be classified safe"
+            } else {
+                "this is a standalone scan, so the existing git-only safety rule remains in use"
+            };
             inventory.notes.push(format!(
                 "herdr is not reachable ({err}); worktrees held open by a workspace and panes \
-                 working inside a checkout cannot be identified, and none will be offered for \
-                 removal through herdr"
+                 working inside a checkout cannot be identified; {consequence}, and none will \
+                 be offered for removal through herdr"
             ));
-            None
+            (None, visibility)
         }
     };
 
-    let discovery = discover(config, client.as_mut(), &mut inventory.notes)?;
+    let discovery = discover(
+        config,
+        client.as_mut(),
+        initial_herdr_visibility,
+        &mut inventory.notes,
+    )?;
     let repos = discovery.repos;
     let mut open = discovery.open;
     let panes = discovery.panes;
     let workspaces = discovery.workspaces;
+    let herdr_visibility = discovery.herdr_visibility;
+    let mut incomplete_herdr_repos = BTreeSet::new();
     if repos.is_empty() {
         inventory.notes.push(
             "no git repositories in scope. Pass --repo <PATH> to scan one explicitly, or open \
@@ -84,11 +104,13 @@ pub fn scan(config: &Config) -> Result<Inventory> {
                     }
                 }
                 Err(err) => {
-                    // `not_git_worktree` is data, not a failure: a repo can be
-                    // removed from disk between the snapshot and this call.
+                    // `not_git_worktree` is data, not failed visibility: Herdr
+                    // positively answered that this root has no worktree view.
                     if herdr::error_code(&*err) != Some(herdr::ERR_NOT_GIT) {
+                        incomplete_herdr_repos.insert(repo.key.clone());
                         inventory.notes.push(format!(
-                            "could not ask herdr which checkouts are open in {}: {err}",
+                            "{}: could not complete herdr worktree.list ({err}); workspace visibility \
+                             is unknown for this repository, so its worktrees cannot be classified safe",
                             repo.root.display()
                         ));
                     }
@@ -246,6 +268,13 @@ pub fn scan(config: &Config) -> Result<Inventory> {
             );
 
             let facts = Facts {
+                herdr_visibility: if herdr_visibility == HerdrVisibility::Incomplete
+                    || incomplete_herdr_repos.contains(&repo.key)
+                {
+                    HerdrVisibility::Incomplete
+                } else {
+                    herdr_visibility
+                },
                 upstream: branch_row.map(|b| b.upstream.clone()).unwrap_or_default(),
                 last_commit: branch_row.and_then(|b| b.tip),
                 open_workspace,
@@ -299,6 +328,7 @@ struct Discovery {
     open: BTreeMap<PathBuf, OpenWorkspace>,
     panes: Vec<herdr::PaneCwd>,
     workspaces: BTreeMap<String, herdr::WorkspaceSummary>,
+    herdr_visibility: HerdrVisibility,
 }
 
 /// The repositories in scope, and the checkouts the session holds open.
@@ -309,10 +339,12 @@ struct Discovery {
 fn discover(
     config: &Config,
     client: Option<&mut Herdr>,
+    initial_herdr_visibility: HerdrVisibility,
     notes: &mut Vec<String>,
 ) -> Result<Discovery> {
     let mut repos: Vec<Repo> = Vec::new();
     let mut open: BTreeMap<PathBuf, OpenWorkspace> = BTreeMap::new();
+    let mut herdr_visibility = initial_herdr_visibility;
 
     // `--repo` narrows which repositories are scanned. It does not make the
     // session's workspaces stop existing, so the snapshot is still read for
@@ -324,9 +356,11 @@ fn discover(
         Some(client) => match client.session_view() {
             Ok(session) => session,
             Err(err) => {
+                herdr_visibility = HerdrVisibility::Incomplete;
                 notes.push(format!(
-                    "could not read the herdr session ({err}); workspace names, agent \
-                     activity and pane occupancy are unavailable, and without --repo only \
+                    "could not read the herdr session.snapshot ({err}); repository discovery, \
+                     workspace names, agent activity and pane occupancy are unavailable, so \
+                     affected worktrees cannot be classified safe; without --repo only \
                      explicitly named repositories will be scanned"
                 ));
                 herdr::SessionView {
@@ -364,6 +398,7 @@ fn discover(
             open,
             panes,
             workspaces,
+            herdr_visibility,
         });
     }
 
@@ -401,6 +436,7 @@ fn discover(
         open,
         panes,
         workspaces,
+        herdr_visibility,
     })
 }
 

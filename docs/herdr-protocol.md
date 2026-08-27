@@ -137,6 +137,32 @@ unchanged. Notes from the capture and live runs:
 - Pane cwds are echoed paths like `checkout_path` and go through
   `herdr::tidy_path` before any join.
 
+## Visibility failures narrow safety
+
+Shear distinguishes three states rather than treating every empty Herdr join as
+the same fact:
+
+- A hand-run standalone scan, with neither `HERDR_PLUGIN_ID` nor a non-empty
+  `HERDR_SOCKET_PATH`, keeps the existing git-only `safe` rule.
+- A successful `session.snapshot` plus a successful `worktree.list` for a
+  repository gives complete workspace and pane visibility for that repository.
+- Herdr context is expected when either `HERDR_PLUGIN_ID` or a non-empty
+  `HERDR_SOCKET_PATH` is present. If its socket cannot be reached, or a connected
+  socket fails `session.snapshot`, visibility is incomplete for every affected
+  row. If only one repository's `worktree.list` fails, visibility is incomplete
+  only for that repository. Herdr's `not_git_worktree` response remains data,
+  not a failed join, and does not demote the repository.
+
+Incomplete visibility can only narrow the answer: a clean, merged, gone-upstream
+row is `review`, never `safe`, and the inventory note names the failed operation.
+It is not `blocked`, because the user must still be able to select and remove it
+explicitly after reading that warning. Repositories whose snapshot and
+`worktree.list` joins completed remain eligible for `safe`.
+
+This bookkeeping uses only `session.snapshot`, `snapshot.panes`, and
+`worktree.list` fields already present in Herdr 0.8.0. The minimum supported
+Herdr version remains **0.8.0**.
+
 ## Plugin execution environment
 
 Commands are argv arrays run with **no shell**, cwd = plugin root, and a minimal

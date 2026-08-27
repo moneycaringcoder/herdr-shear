@@ -14,9 +14,12 @@
 mod fixtures;
 
 use std::collections::BTreeSet;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::thread::JoinHandle;
 
 use shear::config::Config;
 use shear::model::{Class, Merged, Size, Verdict};
@@ -24,7 +27,7 @@ use shear::{disk, shear as pipeline};
 
 use fixtures::Fixture;
 
-/// `HERDR_SOCKET_PATH` is process-global, so the tests that set it run one at a
+/// Herdr-related environment is process-global, so these tests run one at a
 /// time even though cargo runs them on separate threads.
 fn env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -33,9 +36,139 @@ fn env_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Points the socket client at nothing, so the scan runs with no herdr.
+/// Leaves no Herdr context marker and makes the ordinary fallback socket miss.
 fn no_herdr() {
-    std::env::set_var("HERDR_SOCKET_PATH", "/nonexistent/shear-pipeline-test.sock");
+    std::env::remove_var("HERDR_SOCKET_PATH");
+    std::env::remove_var("HERDR_PLUGIN_ID");
+    std::env::set_var(
+        "XDG_CONFIG_HOME",
+        "/nonexistent/shear-pipeline-standalone-xdg",
+    );
+}
+
+#[derive(Clone)]
+enum InjectedFailure {
+    None,
+    SessionSnapshot,
+    WorktreeList(PathBuf),
+    WorktreeListNotGit(PathBuf),
+}
+
+struct FakeHerdr {
+    dir: PathBuf,
+    socket: PathBuf,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl FakeHerdr {
+    fn new(failure: InjectedFailure) -> Self {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join("shr-pipeline").join(format!(
+            "{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create fake herdr socket directory");
+        let socket = dir.join("s");
+        let listener = UnixListener::bind(&socket).expect("bind fake herdr socket");
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let mut line = String::new();
+                if BufReader::new(&stream).read_line(&mut line).is_err() {
+                    break;
+                }
+                if line.trim().is_empty() {
+                    if thread_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    continue;
+                }
+                let request: serde_json::Value =
+                    serde_json::from_str(line.trim_end()).expect("parse fake herdr request");
+                let id = request["id"].clone();
+                let method = request["method"].as_str().unwrap_or_default();
+                let failure_code = match &failure {
+                    InjectedFailure::None => None,
+                    InjectedFailure::SessionSnapshot if method == "session.snapshot" => {
+                        Some("injected_visibility_failure")
+                    }
+                    InjectedFailure::WorktreeList(repo)
+                        if method == "worktree.list"
+                            && request["params"]["cwd"].as_str()
+                                == Some(repo.to_string_lossy().as_ref()) =>
+                    {
+                        Some("injected_visibility_failure")
+                    }
+                    InjectedFailure::WorktreeListNotGit(repo)
+                        if method == "worktree.list"
+                            && request["params"]["cwd"].as_str()
+                                == Some(repo.to_string_lossy().as_ref()) =>
+                    {
+                        Some(shear::herdr::ERR_NOT_GIT)
+                    }
+                    _ => None,
+                };
+                let response = if let Some(code) = failure_code {
+                    serde_json::json!({
+                        "id": id,
+                        "error": {
+                            "code": code,
+                            "message": format!("injected {method} failure")
+                        }
+                    })
+                } else if method == "session.snapshot" {
+                    serde_json::json!({
+                        "id": id,
+                        "result": {
+                            "type": "session_snapshot",
+                            "snapshot": {
+                                "workspaces": [],
+                                "panes": []
+                            }
+                        }
+                    })
+                } else {
+                    serde_json::json!({
+                        "id": id,
+                        "result": {
+                            "type": "worktree_list",
+                            "worktrees": []
+                        }
+                    })
+                };
+                let mut encoded = serde_json::to_vec(&response).expect("encode fake reply");
+                encoded.push(b'\n');
+                (&stream).write_all(&encoded).expect("write fake reply");
+            }
+        });
+        Self {
+            dir,
+            socket,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn select(&self) {
+        std::env::set_var("HERDR_SOCKET_PATH", &self.socket);
+        std::env::remove_var("HERDR_PLUGIN_ID");
+    }
+}
+
+impl Drop for FakeHerdr {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = UnixStream::connect(&self.socket);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 fn config_for(repo: &Path) -> Config {
@@ -177,7 +310,7 @@ fn an_unreachable_herdr_is_a_note_and_not_an_empty_session() {
     no_herdr();
 
     let fixture = Fixture::new("no-herdr");
-    fixture.safe_worktree("safe");
+    let safe = fixture.safe_worktree("safe");
 
     let inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
 
@@ -199,6 +332,160 @@ fn an_unreachable_herdr_is_a_note_and_not_an_empty_session() {
         .candidates
         .iter()
         .all(|c| !c.classes.contains(&Class::OpenInHerdr)));
+    let safe_row = inventory.find(&safe).expect("standalone safe row");
+    assert_eq!(
+        safe_row.verdict,
+        Verdict::Safe,
+        "a hand-run scan with no Herdr expected preserves the documented standalone rule"
+    );
+    assert!(shear::tui::preselectable(safe_row));
+}
+
+#[test]
+fn either_herdr_context_marker_makes_a_connection_failure_demote_safe_rows() {
+    let _guard = env_lock();
+    no_herdr();
+    std::env::set_var(
+        "HERDR_SOCKET_PATH",
+        "/nonexistent/shear-pipeline-expected.sock",
+    );
+
+    let fixture = Fixture::new("expected-no-herdr");
+    let safe = fixture.safe_worktree("safe");
+    let inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+    std::env::remove_var("HERDR_SOCKET_PATH");
+
+    let row = inventory.find(&safe).expect("safe-shaped row");
+    assert_eq!(row.verdict, Verdict::Review);
+    assert!(!shear::tui::preselectable(row));
+    assert_eq!(inventory.safe().count(), 0);
+    assert!(
+        inventory.notes.iter().any(|note| {
+            note.contains("herdr is not reachable") && note.contains("cannot be identified")
+        }),
+        "{:?}",
+        inventory.notes
+    );
+    std::env::set_var("HERDR_PLUGIN_ID", "shear");
+    let plugin_inventory = pipeline::scan(&config_for(&fixture.repo)).expect("plugin scan");
+    std::env::remove_var("HERDR_PLUGIN_ID");
+    assert_eq!(
+        plugin_inventory
+            .find(&safe)
+            .expect("plugin safe-shaped row")
+            .verdict,
+        Verdict::Review,
+        "HERDR_PLUGIN_ID independently marks Herdr visibility as expected"
+    );
+}
+
+#[test]
+fn complete_herdr_visibility_preserves_safe_classification() {
+    let _guard = env_lock();
+    let server = FakeHerdr::new(InjectedFailure::None);
+    server.select();
+
+    let fixture = Fixture::new("complete-herdr");
+    let safe = fixture.safe_worktree("safe");
+    let inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+
+    let row = inventory.find(&safe).expect("safe row");
+    assert_eq!(row.verdict, Verdict::Safe);
+    assert!(shear::tui::preselectable(row));
+}
+
+#[test]
+fn failed_session_snapshot_demotes_every_safe_shape_to_review() {
+    let _guard = env_lock();
+    let server = FakeHerdr::new(InjectedFailure::SessionSnapshot);
+    server.select();
+
+    let fixture = Fixture::new("failed-snapshot");
+    let safe = fixture.safe_worktree("safe");
+    let inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+
+    let row = inventory.find(&safe).expect("safe-shaped row");
+    assert_eq!(
+        row.verdict,
+        Verdict::Review,
+        "the death signals remain reviewable so explicit removal stays available"
+    );
+    assert!(!shear::tui::preselectable(row));
+    assert_eq!(inventory.safe().count(), 0);
+    assert!(
+        inventory
+            .notes
+            .iter()
+            .any(|note| note.contains("session.snapshot")
+                && note.contains("cannot be classified safe")),
+        "{:?}",
+        inventory.notes
+    );
+}
+
+#[test]
+fn failed_worktree_list_demotes_only_its_repository() {
+    let _guard = env_lock();
+    let blind = Fixture::new("blind-repo");
+    let blind_safe = blind.safe_worktree("safe");
+    let visible = Fixture::new("visible-repo");
+    let visible_safe = visible.safe_worktree("safe");
+    let server = FakeHerdr::new(InjectedFailure::WorktreeList(blind.repo.clone()));
+    server.select();
+
+    let inventory = pipeline::scan(&Config {
+        only_repos: vec![blind.repo.clone(), visible.repo.clone()],
+        integration_ref: Some("main".into()),
+        ..Config::default()
+    })
+    .expect("scan");
+
+    let blind_row = inventory.find(&blind_safe).expect("blind row");
+    let visible_row = inventory.find(&visible_safe).expect("visible row");
+    assert_eq!(blind_row.verdict, Verdict::Review);
+    assert_eq!(visible_row.verdict, Verdict::Safe);
+    assert!(!shear::tui::preselectable(blind_row));
+    assert!(shear::tui::preselectable(visible_row));
+    assert_eq!(
+        inventory
+            .safe()
+            .map(|candidate| candidate.path())
+            .collect::<Vec<_>>(),
+        vec![visible_safe.as_path()],
+        "bulk safety retains only repositories whose Herdr joins completed"
+    );
+    let blindness: Vec<&String> = inventory
+        .notes
+        .iter()
+        .filter(|note| note.contains("worktree.list"))
+        .collect();
+    assert_eq!(blindness.len(), 1, "{:?}", inventory.notes);
+    assert!(blindness[0].contains(blind.repo.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn not_git_worktree_is_a_complete_answer_not_visibility_failure() {
+    let _guard = env_lock();
+    let fixture = Fixture::new("herdr-not-git");
+    let safe = fixture.safe_worktree("safe");
+    let server = FakeHerdr::new(InjectedFailure::WorktreeListNotGit(fixture.repo.clone()));
+    server.select();
+
+    let inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+    let row = inventory.find(&safe).expect("safe row");
+    assert_eq!(
+        row.verdict,
+        Verdict::Safe,
+        "not_git_worktree is Herdr data and must not demote an otherwise safe row"
+    );
+    assert!(shear::tui::preselectable(row));
+    assert!(
+        inventory.notes.iter().all(|note| {
+            !note.contains("worktree.list") && !note.contains("visibility is unknown")
+        }),
+        "not_git_worktree must not report incomplete visibility: {:?}",
+        inventory.notes
+    );
 }
 
 #[test]

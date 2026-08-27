@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use shear::classify::{self, Facts};
+use shear::classify::{self, Facts, HerdrVisibility};
 use shear::config::Config;
 use shear::git;
 use shear::model::{
@@ -489,6 +489,7 @@ fn a_foreign_repo_is_never_grouped_with_this_one() {
 fn facts_for(inventory: &Inventory, path: &Path) -> Facts {
     let candidate = at(inventory, path).clone();
     Facts {
+        herdr_visibility: HerdrVisibility::Standalone,
         worktree: candidate.worktree,
         dirt: candidate.dirt,
         upstream: candidate.upstream,
@@ -582,6 +583,7 @@ fn the_open_workspace_reason_says_when_an_agent_is_mid_task() {
 #[test]
 fn merged_unknown_never_satisfies_safe() {
     let base = Facts {
+        herdr_visibility: HerdrVisibility::Standalone,
         worktree: bare_worktree(),
         dirt: Dirt::default(),
         upstream: Upstream {
@@ -645,6 +647,7 @@ fn merged_unknown_never_satisfies_safe() {
 #[test]
 fn an_occupied_checkout_is_blocked_however_safe_it_looks() {
     let safe = Facts {
+        herdr_visibility: HerdrVisibility::Standalone,
         worktree: bare_worktree(),
         dirt: Dirt::default(),
         upstream: Upstream {
@@ -700,6 +703,7 @@ fn an_occupied_checkout_is_blocked_however_safe_it_looks() {
 #[test]
 fn a_second_occupant_is_counted_rather_than_listed() {
     let facts = Facts {
+        herdr_visibility: HerdrVisibility::Standalone,
         worktree: bare_worktree(),
         dirt: Dirt::default(),
         upstream: Upstream::default(),
@@ -732,6 +736,7 @@ fn a_second_occupant_is_counted_rather_than_listed() {
 #[test]
 fn an_unknown_commit_time_is_not_staleness() {
     let facts = Facts {
+        herdr_visibility: HerdrVisibility::Standalone,
         worktree: bare_worktree(),
         dirt: Dirt::default(),
         upstream: Upstream::default(),
@@ -821,6 +826,7 @@ fn dirty_signals_quote_every_kind_of_dirt_in_significance_order() {
     let now = SystemTime::UNIX_EPOCH + week(100);
     let candidate = classify::classify(
         Facts {
+            herdr_visibility: HerdrVisibility::Standalone,
             worktree: bare_worktree(),
             dirt: Dirt {
                 paths: 14,
@@ -858,6 +864,7 @@ fn protected_signals_quote_pattern_precede_dirt_and_name_the_unblocking_action()
     let now = SystemTime::UNIX_EPOCH + week(100);
     let candidate = classify::classify(
         Facts {
+            herdr_visibility: HerdrVisibility::Standalone,
             worktree: bare_worktree(),
             dirt: Dirt {
                 paths: 1,
@@ -901,6 +908,7 @@ fn unprotected_signals_do_not_invent_a_protection_reason() {
     let now = SystemTime::UNIX_EPOCH + week(100);
     let candidate = classify::classify(
         Facts {
+            herdr_visibility: HerdrVisibility::Standalone,
             worktree: bare_worktree(),
             dirt: Dirt::default(),
             upstream: Upstream::default(),
@@ -928,6 +936,7 @@ fn an_unknown_merge_signal_says_the_question_was_not_askable() {
     let now = SystemTime::UNIX_EPOCH + week(100);
     let candidate = classify::classify(
         Facts {
+            herdr_visibility: HerdrVisibility::Standalone,
             worktree: bare_worktree(),
             dirt: Dirt::default(),
             upstream: Upstream {
@@ -970,6 +979,7 @@ fn no_commit_time_never_produces_a_stale_or_age_signal() {
     let now = SystemTime::UNIX_EPOCH + week(100);
     let candidate = classify::classify(
         Facts {
+            herdr_visibility: HerdrVisibility::Standalone,
             worktree: bare_worktree(),
             dirt: Dirt::default(),
             upstream: Upstream::default(),
@@ -996,6 +1006,7 @@ fn no_commit_time_never_produces_a_stale_or_age_signal() {
 fn only_non_safe_verdicts_end_with_the_first_failed_safe_condition() {
     let now = SystemTime::UNIX_EPOCH + week(100);
     let safe_facts = Facts {
+        herdr_visibility: HerdrVisibility::Standalone,
         worktree: bare_worktree(),
         dirt: Dirt::default(),
         upstream: Upstream {
@@ -1051,6 +1062,66 @@ fn only_non_safe_verdicts_end_with_the_first_failed_safe_condition() {
             candidate.verdict
         );
     }
+}
+
+#[test]
+fn incomplete_herdr_visibility_only_demotes_the_safe_rule() {
+    let now = SystemTime::UNIX_EPOCH + week(100);
+    let base = Facts {
+        herdr_visibility: HerdrVisibility::Standalone,
+        worktree: bare_worktree(),
+        dirt: Dirt::default(),
+        upstream: Upstream {
+            name: Some("refs/remotes/origin/topic".into()),
+            gone: true,
+            ahead: 0,
+            behind: 0,
+        },
+        merged: Merged::Into("origin/main".into()),
+        last_commit: Some(now),
+        open_workspace: None,
+        occupants: Vec::new(),
+        protected: None,
+    };
+
+    let standalone = classify::classify(base.clone(), week(2), now);
+    let complete = classify::classify(
+        Facts {
+            herdr_visibility: HerdrVisibility::Complete,
+            ..base.clone()
+        },
+        week(2),
+        now,
+    );
+    let incomplete = classify::classify(
+        Facts {
+            herdr_visibility: HerdrVisibility::Incomplete,
+            ..base
+        },
+        week(2),
+        now,
+    );
+
+    assert_eq!(standalone.verdict, Verdict::Safe);
+    assert_eq!(complete.verdict, Verdict::Safe);
+    assert_eq!(
+        incomplete.verdict,
+        Verdict::Review,
+        "unknown Herdr visibility narrows bulk safety without blocking explicit removal"
+    );
+    assert_eq!(
+        incomplete.classes,
+        classes(&[Class::Merged, Class::GoneUpstream]),
+        "visibility is knowledge, not a new death or blocking class"
+    );
+    assert!(
+        incomplete.reason.contains("visibility is incomplete"),
+        "{}",
+        incomplete.reason
+    );
+    assert!(classify::signals(&incomplete, now)
+        .last()
+        .is_some_and(|signal| signal.contains("visibility was not established")));
 }
 
 fn week(n: u64) -> Duration {
