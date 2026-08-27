@@ -58,9 +58,17 @@ explicit selection:
 | `shear --undo-log` | Every removal shear has made, newest first, with the command that restores it. |
 
 The scan is read-only git plumbing (`worktree list`, `status --porcelain=v2`,
-`for-each-ref`) plus one herdr call to find out which checkouts a workspace is
-holding open. If herdr is not reachable, the scan degrades to "no workspace
-information" with a note on screen — never to a silently shorter list.
+`for-each-ref`) plus Herdr queries for the session's workspaces and panes and
+each repository's `open_workspace_id` values. A hand-run standalone scan (no
+`HERDR_PLUGIN_ID` and no non-empty `HERDR_SOCKET_PATH`) keeps the existing
+git-only safety rule when Herdr is absent. Either marker means Herdr context is
+expected. Once Herdr is expected, or the socket has answered, visibility must be
+complete before a row can be `safe`: a failed connection or `session.snapshot`
+demotes all affected rows, while a failed `worktree.list` demotes only that
+repository. Herdr's `not_git_worktree` answer is data, not a failed join. The
+on-screen note names actual missing visibility. These rows stay `review`, not
+`blocked`, so explicit selection and removal remain available; only bulk
+preselection is withheld.
 
 ```mermaid
 flowchart LR
@@ -141,13 +149,15 @@ branch would otherwise report every worktree as unmerged. Nothing carrying
 
 | Verdict | Meaning |
 | --- | --- |
-| `safe` | Clean, merged into the integration ref, upstream gone, not protected, not locked, not open in herdr, not the main checkout. The **only** verdict a bulk action may preselect. |
+| `safe` | Clean, merged into the integration ref, upstream gone, not protected, not locked, not open in herdr, not the main checkout, and backed by complete Herdr workspace/pane visibility or a genuine standalone scan. The **only** verdict a bulk action may preselect. |
 | `review` | Some evidence of death, but not all of it. Removable, never preselected. |
 | `keep` | Nothing suggests this is dead. Removable only by explicit selection. |
 | `blocked` | Cannot be removed as things stand — protected, locked, open in herdr, occupied by a pane, or the main checkout. The row names the unblocking action. |
 
 Every condition in `safe` must be a *positive* observation. An unanswerable
-question fails the test rather than passing it.
+question fails the test rather than passing it. Incomplete Herdr visibility is
+knowledge missing from the safety proof, not a removal blocker: a dying row is
+`review` and remains explicitly selectable.
 
 <img src="docs/img/verdicts.svg" alt="How one worktree gets its verdict: the main checkout and anything locked, open in herdr, or occupied by a pane are blocked outright; dirty is at most review; safe requires merged and gone upstream together; anything with a single death signal is review; the rest is keep." width="100%">
 

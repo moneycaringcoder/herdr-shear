@@ -24,6 +24,15 @@ fn env_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn no_herdr() {
+    std::env::remove_var("HERDR_SOCKET_PATH");
+    std::env::remove_var("HERDR_PLUGIN_ID");
+    std::env::set_var(
+        "XDG_CONFIG_HOME",
+        "/nonexistent/shear-policy-standalone-xdg",
+    );
+}
+
 struct ConfigDir {
     path: PathBuf,
     previous: Option<OsString>,
@@ -297,10 +306,7 @@ fn scan_with_protect(
     tag: &str,
     patterns: &[&str],
 ) -> (ConfigDir, shear::model::Inventory) {
-    std::env::set_var(
-        "HERDR_SOCKET_PATH",
-        "/nonexistent/shear-protect-policy.sock",
-    );
+    no_herdr();
     let contents = serde_json::json!({
         "integration_ref": "main",
         "protect": patterns,
@@ -455,10 +461,7 @@ fn a_pattern_matching_everything_leaves_no_selectable_rows_and_is_counted() {
 fn aggressive_policy_preserves_safe_set_but_moves_keep_to_review() {
     let _guard = env_lock();
     fixtures::pin_git_env();
-    std::env::set_var(
-        "HERDR_SOCKET_PATH",
-        "/nonexistent/shear-policy-invariant.sock",
-    );
+    no_herdr();
 
     let fixture = Fixture::new("policy-invariant");
     let safe = fixture.safe_worktree("safe");

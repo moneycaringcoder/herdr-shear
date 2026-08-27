@@ -536,6 +536,46 @@ fn open_workspaces_returns_only_the_rows_that_carry_an_open_workspace_id() {
     );
 }
 
+#[test]
+fn visibility_call_error_envelopes_remain_failures_for_the_pipeline_to_demote() {
+    for (method, invoke) in [
+        (
+            "session.snapshot",
+            "session visibility must not become an empty snapshot",
+        ),
+        (
+            "worktree.list",
+            "repository visibility must not become an empty worktree list",
+        ),
+    ] {
+        let reply = line(&json!({
+            "id": "shear:1",
+            "error": {
+                "code": "injected_visibility_failure",
+                "message": format!("injected {method} failure"),
+            },
+        }));
+        let server = Server::new(method, vec![Some(reply)]);
+        let (_guard, mut client) = server.client();
+        let err = if method == "session.snapshot" {
+            client.session_view().map(|_| ())
+        } else {
+            client.open_workspaces(Path::new("/repos/repo")).map(|_| ())
+        }
+        .expect_err(invoke);
+
+        assert_eq!(
+            herdr::error_code(&*err),
+            Some("injected_visibility_failure")
+        );
+        assert_eq!(
+            server.connections(),
+            1,
+            "protocol failures are facts, not retryable transport failures"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // worktree.remove
 // ---------------------------------------------------------------------------

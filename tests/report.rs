@@ -14,9 +14,8 @@ use shear::{disk, report, shear as pipeline};
 
 use fixtures::Fixture;
 
-/// `HERDR_SOCKET_PATH` and the plugin directories are process-global, so tests
-/// that set them run one at a time even though cargo runs them on separate
-/// threads.
+/// Herdr context and the plugin directories are process-global, so tests that
+/// set them run one at a time even though cargo runs them on separate threads.
 fn env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -24,9 +23,14 @@ fn env_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Points the socket client at nothing, so the scan runs with no herdr.
+/// Leaves no Herdr context marker and makes the ordinary fallback socket miss.
 fn no_herdr() {
-    std::env::set_var("HERDR_SOCKET_PATH", "/nonexistent/shear-report-test.sock");
+    std::env::remove_var("HERDR_SOCKET_PATH");
+    std::env::remove_var("HERDR_PLUGIN_ID");
+    std::env::set_var(
+        "XDG_CONFIG_HOME",
+        "/nonexistent/shear-report-standalone-xdg",
+    );
 }
 
 fn config_for(repo: &Path) -> Config {

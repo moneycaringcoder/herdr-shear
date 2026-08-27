@@ -246,6 +246,29 @@ fn the_bulk_key_refuses_a_row_that_has_been_mislabelled_safe() {
 }
 
 #[test]
+fn incomplete_visibility_rows_are_never_bulk_selected_but_remain_explicitly_selectable() {
+    let mut inventory = inventory();
+    let blind = inventory.candidates.len();
+    inventory.candidates.push(
+        Row::new("/home/dev/repos/app-wt/blind", "landed/blind")
+            .verdict(Verdict::Review)
+            .classes(&[Class::Merged, Class::GoneUpstream])
+            .merged(Merged::Into("origin/main".into()))
+            .upstream_gone("origin/landed-blind")
+            .reason("herdr workspace and pane visibility is incomplete")
+            .build(),
+    );
+
+    let after_bulk = drive(Review::new(inventory.clone()), &[Key::SelectSafe]);
+    assert!(!after_bulk.selected.contains(&blind));
+
+    let mut explicit = Review::new(inventory);
+    explicit.cursor = blind;
+    let after_toggle = drive(explicit, &[Key::Toggle]);
+    assert_eq!(selection(&after_toggle), BTreeSet::from([blind]));
+}
+
+#[test]
 fn the_bulk_key_replaces_the_selection_rather_than_adding_to_it() {
     // Hand-pick the dirty row first. `a` must not leave it selected: the whole
     // promise of the key is that what it leaves behind is safe.

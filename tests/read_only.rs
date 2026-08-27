@@ -432,6 +432,7 @@ fn run_full_read_path(fixture: &Fixture) -> (Inventory, Vec<String>) {
 
         inventory.candidates.push(shear::classify::classify(
             shear::classify::Facts {
+                herdr_visibility: shear::classify::HerdrVisibility::Standalone,
                 upstream: branch_row
                     .map(|row| row.upstream.clone())
                     .unwrap_or_default(),
