@@ -35,6 +35,7 @@
 //! module is documented and tested as read-only, so mutating commands have to
 //! be somewhere the read-only claim is not made about.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
@@ -487,24 +488,37 @@ pub fn run_remove(config: &Config, args: &[String]) -> Result<()> {
     // Resolve and check everything before removing anything. check() is pure
     // exactly so this pre-flight is possible: one refused path in a batch stops
     // the whole batch, rather than leaving the user to work out which half ran.
+    //
+    // Every raw spelling is resolved, then successful matches are deduplicated
+    // by the exact path git reported. Unknowns are only deduplicated when the
+    // raw paths themselves are equal: broadening their equivalence without a
+    // candidate would risk dropping a target the user actually named.
     let mut selected = Vec::new();
     let mut refusals = Vec::new();
+    let mut seen_candidates = HashSet::new();
+    let mut seen_unknown = HashSet::new();
     for path in &paths {
         let Some(candidate) = shear::resolve(&inventory, path) else {
-            refusals.push((
-                path.clone(),
-                Refusal::Unknown {
-                    path: path.display().to_string(),
-                },
-            ));
+            if seen_unknown.insert(path.as_os_str()) {
+                refusals.push((
+                    path.clone(),
+                    Refusal::Unknown {
+                        path: path.display().to_string(),
+                    },
+                ));
+            }
             continue;
         };
+        if !seen_candidates.insert(candidate.path().as_os_str()) {
+            continue;
+        }
         match check(candidate, permissions) {
             Ok(()) => selected.push(candidate),
             Err(refusal) => refusals.push((candidate.path().to_path_buf(), refusal)),
         }
     }
 
+    let target_count = selected.len() + refusals.len();
     if !refusals.is_empty() {
         for (path, refusal) in &refusals {
             match refusal {
@@ -521,8 +535,8 @@ pub fn run_remove(config: &Config, args: &[String]) -> Result<()> {
         return Err(format!(
             "{} of {} selected {} refused; nothing was removed",
             refusals.len(),
-            paths.len(),
-            plural(paths.len(), "worktree", "worktrees")
+            target_count,
+            plural(target_count, "worktree", "worktrees")
         )
         .into());
     }

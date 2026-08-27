@@ -10,6 +10,8 @@ All notable changes to this project are documented here. The format follows
 
 - `--repo` now rejects a missing value instead of silently widening the scan or
   consuming a following option as a repository path.
+- Repeated `--remove` paths that resolve to the same worktree are now removed
+  and recorded once, while preserving the first-request order of distinct paths.
 
 ## [0.1.2] - 2026-08-26
 
