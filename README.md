@@ -286,11 +286,15 @@ included — cannot be selected at all; the refusal names the unblocking action.
 A clean selection is confirmed once, by count and by bytes. A selection that
 contains anything dirty gets a second, differently worded confirmation that
 names the exact number of at-risk files and requires you to type that number.
+Before either question appears, `r` re-reads git and herdr, carries the explicit
+selection forward by exact path, and computes the question from those fresh
+rows. Anything that vanished or became blocked drops out; if the refresh fails,
+the old inventory and selection remain available and nothing is removed. Input
+typed while the refresh is running is discarded rather than applied to the
+question that follows.
 
 `R` re-reads the world without touching it — after a fetch, a merge, or a
-branch deletion somewhere else — and the selection follows the worktrees by
-path, not by row number. A selected row that is gone, or that the new scan
-calls blocked, drops out and the pane says so.
+branch deletion somewhere else — and likewise carries the selection by path.
 
 ## Configuration
 
