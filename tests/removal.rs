@@ -22,8 +22,8 @@ use shear::model::{
     RemovalRoute, RepoKey, Size, Upstream, Verdict, Worktree,
 };
 use shear::remove::{
-    check, git_remove, parse_remove_args, prunable_note, read_log, remove_one, restore_command,
-    route_for, Permissions, Refusal,
+    check, git_remove, parse_remove_args, prunable_note, read_log, remove_one,
+    remove_one_with_state_dir, restore_command, route_for, Permissions, Refusal,
 };
 
 #[path = "fixtures.rs"]
@@ -674,7 +674,15 @@ fn remove_without_a_path_is_an_error() {
 
 fn run_remove_cli(fixture: &Fixture, paths: &[&Path]) -> std::process::Output {
     let state = arrange();
-    let config_dir = state.join("empty-config");
+    run_remove_cli_with_state(fixture, paths, state)
+}
+
+fn run_remove_cli_with_state(
+    fixture: &Fixture,
+    paths: &[&Path],
+    state_dir: &Path,
+) -> std::process::Output {
+    let config_dir = arrange().join("empty-config");
     std::fs::create_dir_all(&config_dir).expect("create empty config directory");
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_shear"));
@@ -686,9 +694,97 @@ fn run_remove_cli(fixture: &Fixture, paths: &[&Path]) -> std::process::Output {
         .arg(&fixture.repo)
         .arg("--no-size")
         .env("HERDR_PLUGIN_CONFIG_DIR", config_dir)
-        .env("HERDR_SOCKET_PATH", state.join("missing.sock"))
+        .env("HERDR_PLUGIN_STATE_DIR", state_dir)
+        .env("HERDR_SOCKET_PATH", arrange().join("missing.sock"))
         .output()
         .expect("run shear removal")
+}
+
+#[test]
+fn successful_removal_carries_the_exact_warning_when_the_undo_log_is_unwritable() {
+    let state = arrange();
+    let blocked_state = state.join("outcome-state-path-is-a-file");
+    std::fs::write(&blocked_state, b"not a directory").expect("create blocking state file");
+
+    let fixture = Fixture::new("remove-outcome-without-undo-log");
+    let path = fixture.safe_worktree("unlogged-outcome");
+    let oid = fixture.git(&fixture.repo, &["rev-parse", "unlogged-outcome-branch"]);
+    let candidate = candidate(
+        &path,
+        &fixture.repo,
+        Some("unlogged-outcome-branch"),
+        Some(&oid),
+    );
+    let expected_restore = restore_command(&candidate);
+
+    let outcome = remove_one_with_state_dir(
+        &candidate,
+        Permissions::default(),
+        None,
+        &config(),
+        &blocked_state,
+    )
+    .expect("an unavailable undo log does not newly block an explicit removal");
+
+    assert!(!path.exists(), "the checkout is removed");
+    assert_eq!(
+        fixture.git(&fixture.repo, &["rev-parse", "unlogged-outcome-branch"]),
+        oid,
+        "the branch and commit still survive"
+    );
+    assert_eq!(outcome.record.restore_command, expected_restore);
+    let warning = outcome
+        .undo_warning
+        .expect("successful unlogged removal carries its warning");
+    assert!(
+        warning.contains(&format!(
+            "shear: WARNING: no undo record could be written for {}",
+            path.display()
+        )) && warning.contains(&format!("could not create {}", blocked_state.display()))
+            && warning.contains(
+                "shear: the removal is going ahead because you asked for it, but nothing will \
+                 remember it. Keep this:"
+            )
+            && warning.contains(&expected_restore),
+        "the outcome preserves the exact persistent warning and recovery command: {warning}"
+    );
+}
+
+#[test]
+fn an_unwritable_undo_log_keeps_the_cli_warning_loud_during_success() {
+    let state = arrange();
+    let blocked_state = state.join("state-path-is-a-file");
+    std::fs::write(&blocked_state, b"not a directory").expect("create blocking state file");
+
+    let fixture = Fixture::new("remove-without-undo-log");
+    let path = fixture.safe_worktree("unlogged");
+    let oid = fixture.git(&fixture.repo, &["rev-parse", "unlogged-branch"]);
+    let expected_restore = format!(
+        "git -C {} worktree add {} unlogged-branch",
+        fixture.repo.display(),
+        path.display()
+    );
+
+    let output = run_remove_cli_with_state(&fixture, &[&path], &blocked_state);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!path.exists(), "best-effort logging does not block removal");
+    assert_eq!(
+        fixture.git(&fixture.repo, &["rev-parse", "unlogged-branch"]),
+        oid,
+        "the branch and commit still survive"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "shear: WARNING: no undo record could be written for {}",
+            path.display()
+        )) && stderr.contains(
+            "shear: the removal is going ahead because you asked for it, but nothing will \
+             remember it. Keep this:"
+        ) && stderr.contains(&expected_restore),
+        "the CLI keeps the warning and full recovery command loud: {stderr}"
+    );
 }
 
 #[test]
@@ -833,8 +929,13 @@ fn a_clean_worktree_goes_and_its_branch_and_commit_still_resolve() {
 
     let mut candidate = candidate(&path, &fixture.repo, Some("safe-branch"), Some(&oid));
     candidate.size = Size::Skipped;
-    let record = remove_one(&candidate, Permissions::default(), None, &config())
+    let outcome = remove_one(&candidate, Permissions::default(), None, &config())
         .expect("a clean worktree needs no permissions");
+    assert!(
+        outcome.undo_warning.is_none(),
+        "a written undo record produces no warning"
+    );
+    let record = &outcome.record;
 
     assert!(!path.exists(), "the checkout is gone");
     assert!(
@@ -906,8 +1007,10 @@ fn a_prunable_candidate_goes_through_remove_one_and_is_logged() {
     candidate.classes.insert(Class::Prunable);
     candidate.size = Size::Gone;
 
-    let record = remove_one(&candidate, Permissions::default(), None, &config())
+    let outcome = remove_one(&candidate, Permissions::default(), None, &config())
         .expect("a prunable worktree needs no permissions: there is nothing left to lose");
+    assert!(outcome.undo_warning.is_none());
+    let record = &outcome.record;
 
     assert!(!fixture
         .git(&fixture.repo, &["worktree", "list", "--porcelain"])
@@ -1016,6 +1119,7 @@ fn the_undo_log_round_trips_and_its_restore_command_restores_the_checkout() {
 
     let candidate = candidate(&path, &fixture.repo, Some("recoverable-branch"), Some(&oid));
     let written = remove_one(&candidate, Permissions::default(), None, &config()).expect("remove");
+    assert!(written.undo_warning.is_none());
     assert!(!path.exists());
 
     let records = read_log().expect("read the undo log");
@@ -1023,7 +1127,10 @@ fn the_undo_log_round_trips_and_its_restore_command_restores_the_checkout() {
         .iter()
         .find(|record| record.path == path.to_string_lossy())
         .expect("the removal is in the log");
-    assert_eq!(record, &written, "what was returned is what was written");
+    assert_eq!(
+        record, &written.record,
+        "what was returned is what was written"
+    );
     assert_eq!(record.branch.as_deref(), Some("recoverable-branch"));
     assert_eq!(record.head_oid.as_deref(), Some(oid.as_str()));
     assert_eq!(record.route, "git");
@@ -1079,6 +1186,41 @@ fn the_undo_record_is_written_before_the_removal_is_attempted() {
         "the record was appended before the attempt, and survives its failure"
     );
     assert!(bogus.exists(), "and the failed removal changed nothing");
+}
+
+#[test]
+fn a_failed_route_carries_the_undo_warning_emitted_before_the_attempt() {
+    let state = arrange();
+    let blocked_state = state.join("failed-route-state-path-is-a-file");
+    std::fs::write(&blocked_state, b"not a directory").expect("create blocking state file");
+
+    let fixture = Fixture::new("failed-route-without-undo-log");
+    let oid = fixture.git(&fixture.repo, &["rev-parse", "HEAD"]);
+    let bogus = fixture.root().join("not-a-worktree");
+    std::fs::create_dir_all(&bogus).expect("create a directory git knows nothing about");
+    let candidate = candidate(&bogus, &fixture.repo, None, Some(&oid));
+    let restore = restore_command(&candidate);
+
+    let failure = remove_one_with_state_dir(
+        &candidate,
+        Permissions::default(),
+        None,
+        &config(),
+        &blocked_state,
+    )
+    .expect_err("the git route still fails");
+
+    assert!(failure.message.contains("not a working tree"));
+    let warning = failure
+        .undo_warning
+        .expect("the route failure retains the earlier warning");
+    assert!(
+        warning.contains("WARNING")
+            && warning.contains(blocked_state.to_string_lossy().as_ref())
+            && warning.contains(&restore),
+        "the exact persistent recovery warning survives the route error: {warning}"
+    );
+    assert!(bogus.exists(), "the failed route changed nothing");
 }
 
 #[test]

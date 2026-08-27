@@ -55,7 +55,14 @@ explicit selection:
 | `shear --review` | Interactive review pane: select, confirm, remove. |
 | `shear --remove <PATH>` | Removes one named worktree, subject to every guard below. |
 | `shear --restore <id>` | Restores the checkout named by a `#N` from `--undo-log`. It returns on its branch only if that branch still points at the recorded commit; otherwise it returns detached at that commit, without creating or moving a branch. |
-| `shear --undo-log` | Every removal shear has made, newest first, with the command that restores it. |
+| `shear --undo-log` | Every removal shear successfully recorded, newest first, with the command that restores it. |
+
+Shear attempts to append the undo record before removing a checkout. If the
+state directory is unwritable, an explicitly confirmed removal still proceeds,
+but shear warns before the attempt and keeps the full restore command visible.
+The review pane preserves that warning through later actions, route failures,
+redraws, and pane exit. The undo log therefore does not claim to contain a
+removal whose record could not be written.
 
 The scan is read-only git plumbing (`worktree list`, `status --porcelain=v2`,
 `for-each-ref`) plus Herdr queries for the session's workspaces and panes and

@@ -28,8 +28,9 @@
 //! 7. **Never `rm -rf`.** Removal is `worktree.remove` over the socket for a
 //!    worktree herdr holds open, and `git worktree remove` otherwise. Both leave
 //!    the branch and every commit on it in place.
-//! 8. Every removal is appended to the undo log *before* it is attempted, so a
-//!    removal that half-succeeds is still recoverable.
+//! 8. Shear attempts to append every removal to the undo log *before* acting.
+//!    If the log is unwritable, it warns with the full recovery command before
+//!    honoring the explicit removal anyway.
 //!
 //! The git invocations that write live here rather than in `git.rs`. That
 //! module is documented and tested as read-only, so mutating commands have to
@@ -265,8 +266,34 @@ pub fn route_for(candidate: &Candidate) -> RemovalRoute {
         None => RemovalRoute::Git,
     }
 }
+/// A successful removal together with the status of its best-effort undo log.
+///
+/// `undo_warning` is the exact warning emitted before the removal when the
+/// record could not be written. Callers that redraw their output must preserve
+/// it so the recovery command remains visible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovalOutcome {
+    pub record: RemovalRecord,
+    /// `None` means the undo record was written successfully.
+    pub undo_warning: Option<String>,
+}
+/// A failed removal, retaining any undo warning emitted before the route was
+/// attempted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovalFailure {
+    pub message: String,
+    pub undo_warning: Option<String>,
+}
 
-/// Removes one candidate. Appends to the undo log first, then acts.
+impl std::fmt::Display for RemovalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RemovalFailure {}
+
+/// Removes one candidate. Attempts the undo log first, then acts.
 ///
 /// `herdr` is `None` when there is no socket to reach, which makes
 /// [`RemovalRoute::Herdr`] unavailable; a candidate that needs it is refused
@@ -277,9 +304,38 @@ pub fn remove_one(
     permissions: Permissions,
     herdr: Option<&mut Herdr>,
     config: &Config,
-) -> Result<RemovalRecord> {
+) -> std::result::Result<RemovalOutcome, RemovalFailure> {
+    remove_one_with_append(candidate, permissions, herdr, config, append_log)
+}
+
+/// Test seam for exercising an unavailable state directory without mutating
+/// the process-wide environment.
+#[doc(hidden)]
+pub fn remove_one_with_state_dir(
+    candidate: &Candidate,
+    permissions: Permissions,
+    herdr: Option<&mut Herdr>,
+    config: &Config,
+    state_dir: &Path,
+) -> std::result::Result<RemovalOutcome, RemovalFailure> {
+    let undo_log = config::undo_log_in(state_dir);
+    remove_one_with_append(candidate, permissions, herdr, config, |record| {
+        append_log_to(record, &undo_log)
+    })
+}
+
+fn remove_one_with_append(
+    candidate: &Candidate,
+    permissions: Permissions,
+    herdr: Option<&mut Herdr>,
+    config: &Config,
+    append_undo: impl FnOnce(&RemovalRecord) -> Result<()>,
+) -> std::result::Result<RemovalOutcome, RemovalFailure> {
     if let Err(refusal) = check(candidate, permissions) {
-        return Err(Box::new(refusal));
+        return Err(RemovalFailure {
+            message: refusal.to_string(),
+            undo_warning: None,
+        });
     }
 
     let route = route_for(candidate);
@@ -296,15 +352,17 @@ pub fn remove_one(
                 .as_ref()
                 .map(|w| format!("{} ({})", w.workspace_id, w.label))
                 .unwrap_or_else(|| "an unknown workspace".to_string());
-            return Err(format!(
-                "{}: herdr holds this worktree open as workspace {open}, so it can only be \
-                 removed through the herdr socket — and there is no socket to reach. \
-                 shear will not remove it with git instead: that would leave herdr showing a \
-                 workspace whose directory has vanished. Run this from inside herdr, or close \
-                 the workspace yourself first.",
-                path.display()
-            )
-            .into());
+            return Err(RemovalFailure {
+                message: format!(
+                    "{}: herdr holds this worktree open as workspace {open}, so it can only be \
+                     removed through the herdr socket — and there is no socket to reach. \
+                     shear will not remove it with git instead: that would leave herdr showing a \
+                     workspace whose directory has vanished. Run this from inside herdr, or close \
+                     the workspace yourself first.",
+                    path.display()
+                ),
+                undo_warning: None,
+            });
         }
         (RemovalRoute::Git, _) => None,
     };
@@ -316,18 +374,22 @@ pub fn remove_one(
     let record = record_for(candidate, route);
 
     // Rule 8: the note goes down before the act, so a removal that half-succeeds
-    // is still recoverable.
-    if let Err(err) = append_log(&record) {
-        eprintln!(
+    // is still recoverable. Logging is best-effort, but its failure warning is
+    // part of a successful outcome so a caller that redraws cannot erase it.
+    let undo_warning = append_undo(&record).err().map(|err| {
+        format!(
             "shear: WARNING: no undo record could be written for {}: {err}\n\
              shear: the removal is going ahead because you asked for it, but nothing will \
              remember it. Keep this: {}",
             path.display(),
             record.restore_command
-        );
+        )
+    });
+    if let Some(warning) = &undo_warning {
+        eprintln!("{warning}");
     }
 
-    match route {
+    let removal_error = match route {
         RemovalRoute::Herdr => {
             let client = client
                 .as_mut()
@@ -338,16 +400,24 @@ pub fn remove_one(
                 .expect("the herdr route implies an open workspace");
             client
                 .remove_worktree(&workspace.workspace_id, force)
-                .map_err(|err| -> Box<dyn std::error::Error> {
-                    format!("{}: herdr refused the removal: {err}", path.display()).into()
-                })?;
+                .err()
+                .map(|err| format!("{}: herdr refused the removal: {err}", path.display()))
         }
-        RemovalRoute::Git => {
-            git_remove(&candidate.worktree.repo_root, &path, force, config)?;
-        }
+        RemovalRoute::Git => git_remove(&candidate.worktree.repo_root, &path, force, config)
+            .err()
+            .map(|err| err.to_string()),
+    };
+    if let Some(message) = removal_error {
+        return Err(RemovalFailure {
+            message,
+            undo_warning,
+        });
     }
 
-    Ok(record)
+    Ok(RemovalOutcome {
+        record,
+        undo_warning,
+    })
 }
 
 /// `git worktree remove <path>`, run from the repo root.
@@ -405,9 +475,11 @@ pub fn restore_command(candidate: &Candidate) -> String {
 /// removal with no undo record is exactly the situation the log exists to
 /// prevent. Reporting is [`remove_one`]'s job; this one simply fails.
 pub fn append_log(record: &RemovalRecord) -> Result<()> {
-    use std::io::Write;
+    append_log_to(record, &config::undo_log())
+}
 
-    let path = config::undo_log();
+fn append_log_to(record: &RemovalRecord, path: &Path) -> Result<()> {
+    use std::io::Write;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|err| format!("could not create {}: {err}", parent.display()))?;
@@ -417,7 +489,7 @@ pub fn append_log(record: &RemovalRecord) -> Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(path)
         .map_err(|err| format!("could not open {}: {err}", path.display()))?;
     file.write_all(line.as_bytes())
         .map_err(|err| format!("could not write {}: {err}", path.display()))?;
@@ -584,9 +656,9 @@ pub fn run_remove(config: &Config, args: &[String]) -> Result<()> {
     let mut failures = 0usize;
     for candidate in selected {
         match remove_one(candidate, permissions, client.as_mut(), config) {
-            Ok(record) => {
-                println!("removed {}", record.path);
-                println!("  restore with: {}", record.restore_command);
+            Ok(outcome) => {
+                println!("removed {}", outcome.record.path);
+                println!("  restore with: {}", outcome.record.restore_command);
             }
             Err(err) => {
                 failures += 1;
