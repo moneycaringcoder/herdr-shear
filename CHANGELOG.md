@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The review pane now refreshes selected worktrees before showing a removal
+  confirmation. Its count and dirty-file acknowledgement come from the fresh
+  scan; vanished or newly blocked rows drop out, and a failed refresh preserves
+  the previous inventory and selection without removing anything. Known disk
+  sizes survive the scan, settling measurements update the live question, and
+  input queued during the refresh is discarded before any next mode can use it.
 - Incomplete Herdr visibility can no longer produce a `safe` row: a failed
   expected connection or `session.snapshot` demotes all affected worktrees,
   while a failed `worktree.list` demotes only that repository. Dying rows remain

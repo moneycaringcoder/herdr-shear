@@ -13,7 +13,7 @@ use shear::model::{
     Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, Repo, RepoKey, Size,
     Upstream, Verdict, Worktree,
 };
-use shear::tui::{adopt, apply, decode, for_raw_terminal, frame, Key, Mode, Review};
+use shear::tui::{adopt, apply, decode, for_raw_terminal, frame, preflight, Key, Mode, Review};
 
 // ---------------------------------------------------------------------------
 // Hand-built inventory
@@ -208,6 +208,16 @@ fn review() -> Review {
 fn drive(mut review: Review, keys: &[Key]) -> Review {
     for key in keys {
         review = apply(review, *key);
+        if review.mode == Mode::Preflighting {
+            // `scan` returns Pending sizes; preflight must carry any state the
+            // pane already knows by path rather than resetting confirmation
+            // bytes to zero.
+            let mut fresh = review.inventory.clone();
+            for candidate in &mut fresh.candidates {
+                candidate.size = Size::Pending;
+            }
+            review = preflight(review, Ok::<Inventory, &str>(fresh));
+        }
     }
     review
 }
@@ -374,6 +384,200 @@ fn an_empty_inventory_has_nowhere_to_move_and_does_not_mind() {
 }
 
 // ---------------------------------------------------------------------------
+// Removal preflight
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_enters_preflight_before_any_confirmation() {
+    let selected = drive(review(), &[Key::SelectSafe]);
+    let after = apply(selected, Key::Remove);
+
+    assert_eq!(after.mode, Mode::Preflighting);
+    assert!(
+        frame(&after, 80, 24).contains("Refreshing selection\u{2026}"),
+        "the brief driver-owned state is visible"
+    );
+    assert_eq!(
+        apply(after, Key::Confirm).mode,
+        Mode::Preflighting,
+        "confirmation input cannot bypass the fresh scan"
+    );
+}
+
+#[test]
+fn a_failed_preflight_preserves_the_old_inventory_selection_and_cursor() {
+    let selected = drive(review(), &[Key::SelectSafe]);
+    let requested = apply(selected, Key::Remove);
+    let old_inventory = requested.inventory.clone();
+    let old_selection = requested.selected.clone();
+    let old_cursor = requested.cursor;
+
+    let after = preflight(requested, Err::<Inventory, _>("git status timed out"));
+
+    assert_eq!(after.inventory, old_inventory);
+    assert_eq!(after.selected, old_selection);
+    assert_eq!(after.cursor, old_cursor);
+    assert_eq!(after.mode, Mode::Browsing);
+    assert!(
+        after.messages.iter().any(|message| {
+            message.contains("git status timed out")
+                && message.contains("Nothing was removed")
+                && message.contains("Press `r` to try again")
+        }),
+        "the old state remains usable and the message says how to retry: {:?}",
+        after.messages
+    );
+}
+
+#[test]
+fn a_newly_blocked_selection_is_dropped_before_confirmation() {
+    let mut selected = review();
+    selected.selected = BTreeSet::from([SAFE_A]);
+    let requested = apply(selected, Key::Remove);
+    let mut fresh = inventory();
+    fresh.candidates[SAFE_A].verdict = Verdict::Blocked;
+    fresh.candidates[SAFE_A].reason = "opened in herdr workspace ui-review".into();
+
+    let after = preflight(requested, Ok::<Inventory, &str>(fresh));
+
+    assert_eq!(after.mode, Mode::Browsing);
+    assert!(after.selected.is_empty());
+    assert!(
+        after
+            .messages
+            .iter()
+            .any(|message| message.contains("Dropped 1 selected worktree")),
+        "{:?}",
+        after.messages
+    );
+}
+
+#[test]
+fn a_vanished_selection_is_dropped_before_confirmation() {
+    let mut selected = review();
+    selected.selected = BTreeSet::from([SAFE_A]);
+    let requested = apply(selected, Key::Remove);
+    let mut fresh = inventory();
+    fresh
+        .candidates
+        .retain(|candidate| candidate.worktree.path != Path::new(SAFE_A_PATH));
+
+    let after = preflight(requested, Ok::<Inventory, &str>(fresh));
+
+    assert_eq!(after.mode, Mode::Browsing);
+    assert!(after.selected.is_empty());
+    assert!(
+        after
+            .messages
+            .iter()
+            .any(|message| message.contains("Nothing remains selected")),
+        "{:?}",
+        after.messages
+    );
+}
+
+#[test]
+fn a_partial_fresh_selection_confirms_only_survivors_and_keeps_the_drop_message() {
+    let selected = drive(review(), &[Key::SelectSafe]);
+    let requested = apply(selected, Key::Remove);
+    let mut fresh = inventory();
+    fresh.candidates[SAFE_B].verdict = Verdict::Blocked;
+    fresh.candidates[SAFE_B].reason = "occupied by another herdr pane".into();
+
+    let after = preflight(requested, Ok::<Inventory, &str>(fresh));
+
+    assert!(matches!(&after.mode, Mode::ConfirmClean { count: 1, .. }));
+    assert_eq!(
+        after
+            .selection()
+            .map(|candidate| candidate.worktree.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![Path::new(SAFE_A_PATH)]
+    );
+    assert!(after
+        .messages
+        .iter()
+        .any(|message| message.contains("Dropped 1 selected worktree")));
+    assert!(
+        frame(&after, 80, 24).contains("Dropped 1 selected worktree"),
+        "the drop remains visible beside the fresh confirmation"
+    );
+
+    let removing = apply(after, Key::Confirm);
+    assert_eq!(removing.mode, Mode::Removing);
+    assert_eq!(
+        removing
+            .selection()
+            .map(|candidate| candidate.worktree.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![Path::new(SAFE_A_PATH)],
+        "the blocked row is absent from the only selection perform can see"
+    );
+}
+
+#[test]
+fn scan_shaped_pending_rows_preserve_known_confirmation_bytes() {
+    let selected = drive(review(), &[Key::SelectSafe]);
+    let requested = apply(selected, Key::Remove);
+    let mut fresh = inventory();
+    for candidate in &mut fresh.candidates {
+        candidate.size = Size::Pending;
+    }
+
+    let after = preflight(requested, Ok::<Inventory, &str>(fresh));
+
+    assert_eq!(
+        after.mode,
+        Mode::ConfirmClean {
+            count: 2,
+            bytes: 1_310_000_000 + 419_430_400,
+        }
+    );
+    assert!(after
+        .selection()
+        .all(|candidate| matches!(candidate.size, Size::Bytes(_))));
+}
+
+#[test]
+fn a_confirmation_renders_live_bytes_as_pending_sizes_settle() {
+    let mut selected = review();
+    selected.selected = BTreeSet::from([SAFE_A]);
+    selected.inventory.candidates[SAFE_A].size = Size::Pending;
+    let requested = apply(selected, Key::Remove);
+    let mut fresh = inventory();
+    for candidate in &mut fresh.candidates {
+        candidate.size = Size::Pending;
+    }
+    let mut after = preflight(requested, Ok::<Inventory, &str>(fresh));
+
+    assert!(matches!(
+        &after.mode,
+        Mode::ConfirmClean { count: 1, bytes: 0 }
+    ));
+    let pending = frame(&after, 80, 24);
+    assert!(!pending.contains("reclaim 0 B"), "{pending}");
+    assert!(
+        pending.contains("Disk size is not measured yet."),
+        "the Pending row is explicitly disclosed as unmeasured:\n{pending}"
+    );
+
+    let settled = 2_000_000;
+    after
+        .inventory
+        .candidates
+        .iter_mut()
+        .find(|candidate| candidate.worktree.path == Path::new(SAFE_A_PATH))
+        .unwrap()
+        .size = Size::Bytes(settled);
+    let rendered = frame(&after, 80, 24);
+    assert!(
+        rendered.contains(&format!("reclaim {}", shear::render::human_bytes(settled))),
+        "the question reads the settled live inventory:\n{rendered}"
+    );
+    assert!(!rendered.contains("not measured"), "{rendered}");
+}
+
+// ---------------------------------------------------------------------------
 // The clean confirmation
 // ---------------------------------------------------------------------------
 
@@ -489,6 +693,47 @@ fn the_dirty_confirmation_aggregates_unique_paths_not_status_dimensions() {
 }
 
 #[test]
+fn a_changed_dirty_count_is_the_count_that_must_be_typed() {
+    let requested = apply(with_a_dirty_row(), Key::Remove);
+    let mut fresh = inventory();
+    fresh.candidates[DIRTY_REVIEW].dirt = Dirt {
+        paths: 17,
+        staged: 5,
+        unstaged: 7,
+        untracked: 5,
+        unmerged: 0,
+    };
+
+    let first = preflight(requested, Ok::<Inventory, &str>(fresh));
+    assert!(matches!(&first.mode, Mode::ConfirmClean { count: 2, .. }));
+    let current = apply(first, Key::Confirm);
+    assert_eq!(
+        current.mode,
+        Mode::ConfirmDirty {
+            files: 17,
+            typed: String::new(),
+            worktrees: 1,
+        }
+    );
+
+    let mut stale_answer = typed("12");
+    stale_answer.push(Key::Confirm);
+    let refused = drive(current, &stale_answer);
+    assert!(matches!(
+        &refused.mode,
+        Mode::ConfirmDirty {
+            files: 17,
+            typed,
+            ..
+        } if typed.is_empty()
+    ));
+
+    let mut fresh_answer = typed("17");
+    fresh_answer.push(Key::Confirm);
+    assert_eq!(drive(refused, &fresh_answer).mode, Mode::Removing);
+}
+
+#[test]
 fn the_dirty_confirmation_cannot_be_answered_with_y() {
     // `y` and Enter both decode to Confirm, which is exactly the reflex this
     // confirmation exists to defeat.
@@ -596,6 +841,10 @@ fn quitting_removes_nothing_however_far_the_session_got() {
     };
     for key in session {
         review = apply(review, key);
+        if review.mode == Mode::Preflighting {
+            let fresh = review.inventory.clone();
+            review = preflight(review, Ok::<Inventory, &str>(fresh));
+        }
         modes.push(review.mode.clone());
     }
 
@@ -640,6 +889,7 @@ fn apply_is_total() {
     ];
     for start in [
         Mode::Browsing,
+        Mode::Preflighting,
         Mode::ConfirmClean {
             count: 2,
             bytes: 10,
@@ -770,7 +1020,7 @@ fn an_unmeasured_row_is_counted_rather_than_ignored() {
         rendered.contains("1 not measured"),
         "the footer says how many rows the total is missing:\n{rendered}"
     );
-    let state = apply(state, Key::Remove);
+    let state = drive(state, &[Key::Remove]);
     let rendered = frame(&state, 80, 24);
     let flattened = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
@@ -794,7 +1044,7 @@ fn a_skipped_selection_never_claims_zero_reclaimable_bytes() {
     );
     assert!(!rendered.contains("2 selected \u{b7} 0 B"), "{rendered}");
 
-    let state = apply(state, Key::Remove);
+    let state = drive(state, &[Key::Remove]);
     let rendered = frame(&state, 80, 24);
     let flattened = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(

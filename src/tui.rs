@@ -77,6 +77,8 @@ pub struct Review {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
     Browsing,
+    /// A fresh scan is owed before any destructive confirmation is shown.
+    Preflighting,
     /// First confirmation, for a selection of clean worktrees.
     ConfirmClean {
         count: usize,
@@ -92,8 +94,8 @@ pub enum Mode {
         worktrees: usize,
     },
     Removing,
-    /// A rescan is owed. Like [`Mode::Removing`], the driver owns this state:
-    /// [`apply`] never performs I/O, so it can only ask.
+    /// A rescan is owed. Like [`Mode::Preflighting`] and [`Mode::Removing`], the
+    /// driver owns this state: [`apply`] never performs I/O, so it can only ask.
     Rescanning,
     Done,
 }
@@ -184,8 +186,9 @@ pub fn preselectable(candidate: &crate::model::Candidate) -> bool {
         && !candidate.dirt.is_dirty()
 }
 
-/// Applies one key. Never performs I/O; a transition into [`Mode::Removing`] is
-/// what tells the driver to act.
+/// Applies one key. Never performs I/O; a transition into
+/// [`Mode::Preflighting`] tells the driver to refresh before it asks for
+/// destructive confirmation.
 pub fn apply(mut review: Review, key: Key) -> Review {
     let rows = review.inventory.candidates.len();
     if rows == 0 {
@@ -202,10 +205,10 @@ pub fn apply(mut review: Review, key: Key) -> Review {
             typed,
             worktrees,
         } => confirm_dirty(review, key, files, typed, worktrees),
-        // The driver owns these three: one is a removal in flight, one is a
-        // rescan in flight, and the last is a pane that has already said its
-        // last word.
-        Mode::Removing | Mode::Rescanning | Mode::Done => review,
+        // The driver owns these four: one is a preflight scan, one is a removal
+        // in flight, one is a rescan in flight, and the last is a pane that has
+        // already said its last word.
+        Mode::Preflighting | Mode::Removing | Mode::Rescanning | Mode::Done => review,
     }
 }
 
@@ -292,11 +295,7 @@ fn browsing(mut review: Review, key: Key) -> Review {
                 );
                 return review;
             }
-            let (bytes, _) = crate::shear::reclaimable(review.selection());
-            review.mode = Mode::ConfirmClean {
-                count: review.selected.len(),
-                bytes,
-            };
+            review.mode = Mode::Preflighting;
         }
         Key::Quit => {
             review.messages.clear();
@@ -669,27 +668,45 @@ fn selection_line(review: &Review) -> String {
 }
 
 fn mode_lines(review: &Review, width: usize) -> Vec<String> {
+    let messages = || {
+        review
+            .messages
+            .iter()
+            .flat_map(|message| render::wrap(message, width))
+            .collect::<Vec<_>>()
+    };
     match &review.mode {
-        Mode::ConfirmClean { count, bytes } => {
-            let (_, unknown) = crate::shear::reclaimable(review.selection());
+        Mode::Preflighting => vec!["Refreshing selection\u{2026}".to_string()],
+        Mode::ConfirmClean { count, bytes: _ } => {
+            // Sizing continues behind the confirmation. Derive both figures
+            // from the live inventory so a Pending row that settles cannot
+            // leave the question pinned to its initial zero.
+            let (bytes, unknown) = crate::shear::reclaimable(review.selection());
             let skipped = review
                 .selection()
                 .filter(|candidate| candidate.size == Size::Skipped)
                 .count();
             let unmeasured = unknown.saturating_sub(skipped);
+            let all_non_skipped_unmeasured =
+                bytes == 0 && unmeasured > 0 && unmeasured + skipped == *count;
             let mut ask = if skipped == *count {
                 format!(
                     "Remove {count} {}? Disk measurement was skipped.",
+                    if *count == 1 { "worktree" } else { "worktrees" },
+                )
+            } else if all_non_skipped_unmeasured {
+                format!(
+                    "Remove {count} {}? Disk size is not measured yet.",
                     if *count == 1 { "worktree" } else { "worktrees" },
                 )
             } else {
                 format!(
                     "Remove {count} {} and reclaim {}?",
                     if *count == 1 { "worktree" } else { "worktrees" },
-                    render::human_bytes(*bytes),
+                    render::human_bytes(bytes),
                 )
             };
-            if unmeasured > 0 {
+            if unmeasured > 0 && !all_non_skipped_unmeasured {
                 ask.push_str(&format!(
                     " ({unmeasured} of them was not measured, so the real figure is larger.)"
                 ));
@@ -699,7 +716,8 @@ fn mode_lines(review: &Review, width: usize) -> Vec<String> {
                     " Size measurement was skipped for {skipped} of them."
                 ));
             }
-            let mut lines = render::wrap(&ask, width);
+            let mut lines = messages();
+            lines.extend(render::wrap(&ask, width));
             lines.extend(render::wrap(
                 "Press y or Enter to confirm, Esc to cancel.",
                 width,
@@ -711,7 +729,8 @@ fn mode_lines(review: &Review, width: usize) -> Vec<String> {
             typed,
             worktrees,
         } => {
-            let mut lines = render::wrap(
+            let mut lines = messages();
+            lines.extend(render::wrap(
                 &format!(
                     "{worktrees} of the {} selected {} uncommitted work: {files} {} that exist \
                      nowhere else. Removing the checkout destroys them; no branch and no commit \
@@ -725,7 +744,7 @@ fn mode_lines(review: &Review, width: usize) -> Vec<String> {
                     if *files == 1 { "file" } else { "files" },
                 ),
                 width,
-            );
+            ));
             lines.extend(render::wrap(
                 "This one cannot be answered with `y`. Type the number of files at risk, then \
                  Enter. Esc cancels.",
@@ -736,11 +755,7 @@ fn mode_lines(review: &Review, width: usize) -> Vec<String> {
         }
         Mode::Removing => vec!["Removing\u{2026}".to_string()],
         Mode::Rescanning => vec!["Rescanning\u{2026}".to_string()],
-        Mode::Browsing | Mode::Done => review
-            .messages
-            .iter()
-            .flat_map(|message| render::wrap(message, width))
-            .collect(),
+        Mode::Browsing | Mode::Done => messages(),
     }
 }
 
@@ -915,6 +930,15 @@ fn event_loop(
         if review.is_finished() {
             return Ok(review);
         }
+        if review.mode == Mode::Preflighting {
+            let (next, adopted) = refresh_before_confirmation(review, config)?;
+            review = next;
+            if adopted {
+                sizer = Sizer::start(&review.inventory, config);
+            }
+            dirty = true;
+            continue;
+        }
         if review.mode == Mode::Removing {
             review = perform(review, config);
             sizer = Sizer::start(&review.inventory, config);
@@ -938,9 +962,9 @@ fn event_loop(
 /// Carries out the removals the user has confirmed.
 ///
 /// The only way into this function is [`Mode::Removing`], and the only way into
-/// that mode is through the confirmations in [`apply`]. Every guard in
-/// `remove::check` still runs underneath: this is the last of several gates, not
-/// the only one.
+/// that mode is through confirmations built by [`preflight`] from a fresh scan.
+/// Every guard in `remove::check` still runs underneath: this is the last of
+/// several gates, not the only one.
 fn perform(mut review: Review, config: &Config) -> Review {
     let mut messages: Vec<String> = Vec::new();
     let mut herdr = crate::herdr::Herdr::connect().ok();
@@ -988,6 +1012,113 @@ fn perform(mut review: Review, config: &Config) -> Review {
     review
 }
 
+/// Runs the pre-confirmation scan. The boolean tells the event loop whether a
+/// fresh inventory was adopted and its background sizer must restart.
+fn refresh_before_confirmation(review: Review, config: &Config) -> Result<(Review, bool)> {
+    let scanned = crate::shear::scan(config).map_err(|err| err.to_string());
+    finish_preflight(review, scanned, terminal::discard_input)
+}
+
+fn finish_preflight<E: std::fmt::Display>(
+    review: Review,
+    scanned: std::result::Result<Inventory, E>,
+    discard_input: impl FnOnce() -> Result<()>,
+) -> Result<(Review, bool)> {
+    // A scan can block long enough for reflexive Enter presses to accumulate.
+    // Drop everything typed while it was in flight before either the fresh
+    // confirmation or the failure message can accept another key.
+    discard_input()?;
+    let adopted = scanned.is_ok();
+    Ok((preflight(review, scanned), adopted))
+}
+
+/// Applies a pre-confirmation scan result without performing I/O.
+///
+/// Success adopts by exact path, using the same rules as `R`: vanished and
+/// newly blocked rows are dropped. Only the surviving fresh selection can
+/// produce a confirmation. Failure preserves the previous inventory,
+/// selection, and cursor so the user can retry.
+pub fn preflight<E: std::fmt::Display>(
+    mut review: Review,
+    scanned: std::result::Result<Inventory, E>,
+) -> Review {
+    let mut inventory = match scanned {
+        Ok(inventory) => inventory,
+        Err(err) => {
+            review.mode = Mode::Browsing;
+            review.messages = vec![format!(
+                "could not refresh selection before confirmation ({err}); showing the previous \
+                 scan. Nothing was removed. Press `r` to try again or `R` to rescan."
+            )];
+            return review;
+        }
+    };
+
+    // A scan deliberately does no disk walking, so its rows arrive Pending.
+    // Carry the exact state already known for the same path into the fresh
+    // inventory; otherwise an unchanged selection flashes a false 0 B while
+    // still-Pending rows restart their background walks.
+    for candidate in &mut inventory.candidates {
+        if candidate.size != Size::Pending {
+            continue;
+        }
+        if let Some(previous) = review.inventory.find(candidate.path()) {
+            candidate.size = previous.size;
+        }
+    }
+    let selected_before = review.selected.len();
+    review = adopt(review, inventory);
+    let dropped = selected_before.saturating_sub(review.selected.len());
+
+    if review.selected.is_empty() {
+        review.messages = if dropped == 0 {
+            vec!["Nothing is selected. Nothing was removed.".into()]
+        } else {
+            vec![format!(
+                "{} Nothing remains selected, so nothing was removed.",
+                dropped_selection_message("Refreshed selection", dropped)
+            )]
+        };
+        return review;
+    }
+
+    review.messages = if dropped == 0 {
+        Vec::new()
+    } else {
+        vec![dropped_selection_message("Refreshed selection", dropped)]
+    };
+    let (bytes, _) = crate::shear::reclaimable(review.selection());
+    review.mode = Mode::ConfirmClean {
+        count: review.selected.len(),
+        bytes,
+    };
+    review
+}
+
+#[cfg(test)]
+mod preflight_driver_tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    #[test]
+    fn queued_input_is_discarded_after_success_and_failure() {
+        for scanned in [
+            Ok::<Inventory, &str>(Inventory::default()),
+            Err("scan failed"),
+        ] {
+            let discarded = Cell::new(false);
+            let review = Review::new(Inventory::default());
+            finish_preflight(review, scanned, || {
+                discarded.set(true);
+                Ok(())
+            })
+            .unwrap();
+            assert!(discarded.get());
+        }
+    }
+}
+
 /// Re-reads git and herdr without touching anything, keeping the selection.
 ///
 /// A scan that fails leaves the pane exactly as it was: the previous
@@ -1005,6 +1136,17 @@ fn rescan(mut review: Review, config: &Config) -> Review {
             review
         }
     }
+}
+
+fn dropped_selection_message(action: &str, dropped: usize) -> String {
+    format!(
+        "{action}. Dropped {dropped} selected {}: gone, or not removable.",
+        if dropped == 1 {
+            "worktree"
+        } else {
+            "worktrees"
+        }
+    )
 }
 
 /// Swaps in a fresh inventory, carrying the selection and the cursor across by
@@ -1067,14 +1209,7 @@ pub fn adopt(mut review: Review, inventory: Inventory) -> Review {
     review.messages = if dropped == 0 {
         vec!["Rescanned.".into()]
     } else {
-        vec![format!(
-            "Rescanned. Dropped {dropped} selected {}: gone, or not removable.",
-            if dropped == 1 {
-                "worktree"
-            } else {
-                "worktrees"
-            }
-        )]
+        vec![dropped_selection_message("Rescanned", dropped)]
     };
     review
 }
@@ -1266,6 +1401,19 @@ mod terminal {
         Ok(RawMode(()))
     }
 
+    /// Discards bytes typed while a blocking operation was in flight.
+    pub fn discard_input() -> crate::Result<()> {
+        let fd = FD.load(Ordering::SeqCst);
+        if fd < 0 {
+            return Ok(());
+        }
+        // SAFETY: `fd` is the live stdin descriptor published by `enter`.
+        if unsafe { libc::tcflush(fd, libc::TCIFLUSH) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(())
+    }
+
     /// Puts the terminal back. Idempotent, and safe to call from a signal
     /// handler: two atomic loads and one `tcsetattr`, all async-signal-safe.
     pub fn restore() {
@@ -1309,5 +1457,9 @@ mod terminal {
 
     pub fn enter() -> crate::Result<RawMode> {
         Err("the review pane is unix-only; use --list or --json".into())
+    }
+
+    pub fn discard_input() -> crate::Result<()> {
+        Ok(())
     }
 }
