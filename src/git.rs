@@ -556,11 +556,13 @@ pub fn parse_status(bytes: &[u8]) -> Result<Dirt> {
                 let (staged, unstaged) = xy(field)?;
                 dirt.staged += usize::from(staged);
                 dirt.unstaged += usize::from(unstaged);
+                dirt.paths += 1;
             }
             b'2' => {
                 let (staged, unstaged) = xy(field)?;
                 dirt.staged += usize::from(staged);
                 dirt.unstaged += usize::from(unstaged);
+                dirt.paths += 1;
                 // The framing rule: a rename/copy record owns the *next* field
                 // as well, which holds the original path. Not consuming it makes
                 // the parser read a path as a status record.
@@ -576,8 +578,14 @@ pub fn parse_status(bytes: &[u8]) -> Result<Dirt> {
                     }
                 }
             }
-            b'u' => dirt.unmerged += 1,
-            b'?' => dirt.untracked += 1,
+            b'u' => {
+                dirt.unmerged += 1;
+                dirt.paths += 1;
+            }
+            b'?' => {
+                dirt.untracked += 1;
+                dirt.paths += 1;
+            }
             // Ignored files are not work at risk; `target/` is not a reason to
             // keep a worktree.
             b'!' => {}

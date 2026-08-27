@@ -333,6 +333,35 @@ fn inventory_json_projects_every_size_state_without_inventing_bytes() {
 }
 
 #[test]
+fn json_dirty_files_counts_an_mm_path_once_without_losing_dimensions() {
+    let _guard = env_lock();
+    no_herdr();
+
+    let fixture = Fixture::new("json-dirty-path-count");
+    let path = fixture.add_worktree("double-state", &["-b", "double-state-branch"]);
+    fixture.append(&path, "README.md", "staged change\n");
+    fixture.git(&path, &["add", "README.md"]);
+    fixture.append(&path, "README.md", "unstaged change\n");
+
+    let inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+    let candidate = inventory.find(&path).expect("double-state worktree");
+    assert_eq!(candidate.dirt.paths, 1);
+    assert_eq!(candidate.dirt.staged, 1);
+    assert_eq!(candidate.dirt.unstaged, 1);
+
+    let json = pipeline::to_json(&inventory);
+    let row = json["worktrees"]
+        .as_array()
+        .expect("worktrees")
+        .iter()
+        .find(|row| row["path"] == path.to_string_lossy().as_ref())
+        .expect("double-state row projection");
+    assert_eq!(row["dirty_files"], 1);
+    assert_eq!(row["dirt"]["staged"], 1);
+    assert_eq!(row["dirt"]["unstaged"], 1);
+}
+
+#[test]
 fn json_reports_unknown_as_null_rather_than_as_false() {
     let _guard = env_lock();
     no_herdr();

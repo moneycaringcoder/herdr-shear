@@ -89,6 +89,7 @@ impl Row {
 
     fn dirt(mut self, staged: usize, unstaged: usize, untracked: usize) -> Self {
         self.0.dirt = Dirt {
+            paths: staged + unstaged + untracked,
             staged,
             unstaged,
             untracked,

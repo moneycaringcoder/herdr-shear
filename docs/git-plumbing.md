@@ -162,14 +162,14 @@ sufficient check for a `2` record's original path — it must also be non-empty,
 or a truncated rename silently swallows the empty tail and reports plausible
 dirt on a worktree that has none.
 
-`X` is the index status, `Y` the worktree status. shear counts them separately:
-`X` non-`.` is staged, `Y` non-`.` is unstaged, `u` is unmerged, `?` is
-untracked. The second confirmation for a dirty removal names these numbers, and
-"3 untracked files" and "3 unmerged paths" are very different sentences.
-
-Ignored files (`!`) are **not** counted as dirt — `--untracked-files=all` does
-not list them unless `--ignored` is also given, and a `target/` directory is not
-work at risk.
+`X` is the index status, `Y` the worktree status. shear preserves those
+dimensions separately: `X` non-`.` is staged, `Y` non-`.` is unstaged, `u` is
+unmerged, and `?` is untracked. Independently, each `1`, `2`, `u`, or `?`
+record contributes exactly one at-risk path, even when both `X` and `Y` changed;
+the original-path field following a `2` record contributes none. That unique
+path count is the removal acknowledgement and `dirty_files` value. Header (`#`)
+and ignored (`!`) records contribute none. Ignored files are not work at risk:
+`target/` is not a reason to keep a worktree.
 
 ## Removal, and what git refuses on its own
 

@@ -109,12 +109,13 @@ pub struct PrunableInfo {
 
 /// Working-tree cleanliness, from `status --porcelain=v2 -z -uall`.
 ///
-/// A worktree is dirty if *any* of these is non-zero. They are counted
-/// separately because the second confirmation for a dirty removal has to name
-/// what is at risk, and "3 untracked files" and "3 unmerged paths" are very
-/// different sentences.
+/// `paths` is the number of at-risk paths: each porcelain status record counts
+/// once, even when both its index and worktree states changed. The other fields
+/// preserve those dimensions separately because "3 untracked files" and "3
+/// unmerged paths" are very different sentences.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Dirt {
+    pub paths: usize,
     pub staged: usize,
     pub unstaged: usize,
     pub untracked: usize,
@@ -123,11 +124,11 @@ pub struct Dirt {
 
 impl Dirt {
     pub fn total(&self) -> usize {
-        self.staged + self.unstaged + self.untracked + self.unmerged
+        self.paths
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.total() > 0
+        self.paths > 0
     }
 }
 

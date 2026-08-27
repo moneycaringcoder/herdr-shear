@@ -439,6 +439,7 @@ fn the_rename_record_consumes_two_fields_and_the_newline_path_stays_one_file() {
     assert_eq!(
         dirt,
         shear::model::Dirt {
+            paths: 5,
             staged: 2,
             unstaged: 1,
             untracked: 3,
@@ -448,7 +449,20 @@ fn the_rename_record_consumes_two_fields_and_the_newline_path_stays_one_file() {
          staged add (A.), and three untracked files, one of which has a newline \
          in its name"
     );
-    assert_eq!(dirt.total(), 6);
+    assert_eq!(dirt.total(), 5);
+    assert!(dirt.is_dirty());
+}
+
+#[test]
+fn one_path_changed_in_both_index_and_worktree_counts_once() {
+    let dirt =
+        git::parse_status(b"1 MM N... 100644 100644 100644 old-object new-object tracked.txt\0")
+            .expect("an ordinary MM record parses");
+
+    assert_eq!(dirt.paths, 1);
+    assert_eq!(dirt.staged, 1);
+    assert_eq!(dirt.unstaged, 1);
+    assert_eq!(dirt.total(), 1);
     assert!(dirt.is_dirty());
 }
 

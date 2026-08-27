@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use shear::config::Config;
+use shear::git;
 use shear::model::{
     Candidate, Class, Dirt, Head, LockInfo, Merged, Occupant, OpenWorkspace, PrunableInfo,
     RemovalRoute, RepoKey, Size, Upstream, Verdict, Worktree,
@@ -123,6 +124,7 @@ fn every_permission(acknowledged: usize) -> Permissions {
 
 fn dirty(candidate: &mut Candidate, staged: usize, untracked: usize) {
     candidate.dirt = Dirt {
+        paths: staged + untracked,
         staged,
         untracked,
         ..Default::default()
@@ -501,6 +503,47 @@ fn a_dirty_removal_with_the_exact_acknowledged_count_is_permitted() {
             Permissions {
                 force_dirty: true,
                 acknowledged_files: Some(3),
+                close_workspace: false,
+            }
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn captured_dirty_status_rejects_the_old_dimension_sum_as_an_acknowledgement() {
+    let mut candidate = paper_candidate();
+    candidate.dirt =
+        git::parse_status(include_bytes!("capture/status-v2.z")).expect("captured status parses");
+
+    assert_eq!(
+        check(
+            &candidate,
+            Permissions {
+                force_dirty: true,
+                acknowledged_files: Some(6),
+                close_workspace: false,
+            }
+        ),
+        Err(Refusal::DirtyCountMismatch {
+            acknowledged: 6,
+            actual: 5,
+        })
+    );
+}
+
+#[test]
+fn captured_dirty_status_accepts_its_unique_path_count() {
+    let mut candidate = paper_candidate();
+    candidate.dirt =
+        git::parse_status(include_bytes!("capture/status-v2.z")).expect("captured status parses");
+
+    assert_eq!(
+        check(
+            &candidate,
+            Permissions {
+                force_dirty: true,
+                acknowledged_files: Some(5),
                 close_workspace: false,
             }
         ),
