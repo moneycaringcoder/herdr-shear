@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `--repo` now rejects a missing value instead of silently widening the scan or
+  consuming a following option as a repository path.
+
 ## [0.1.2] - 2026-08-26
 
 ### Added

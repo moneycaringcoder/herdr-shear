@@ -208,7 +208,7 @@ fn run(args: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_acknowledgement, reject_unknown, verb_of};
+    use super::{is_acknowledgement, reject_unknown, run, verb_of};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
@@ -240,6 +240,14 @@ mod tests {
     fn no_arguments_means_a_dry_run_listing() {
         assert_eq!(verb_of(&args(&[])), "--list");
         assert_eq!(verb_of(&args(&["--repo", "/tmp/r"])), "--list");
+    }
+
+    #[test]
+    fn a_missing_repo_value_is_rejected_before_scan_dispatch() {
+        for input in [args(&["--repo"]), args(&["--repo", "--list"])] {
+            let err = run(&input).expect_err("missing repository scope must stop dispatch");
+            assert_eq!(err.to_string(), "--repo needs a value");
+        }
     }
 
     #[test]
