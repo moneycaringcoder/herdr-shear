@@ -178,8 +178,10 @@ pub fn load() -> Result<Config> {
 
 /// Loads the config file, then applies command-line overrides.
 pub fn load_with_args(args: &[String]) -> Result<Config> {
+    // Parse explicit scope before touching the config file. A malformed
+    // `--repo` must never fall through to discovery with the default scope.
+    let only_repos = values_arg(args, "--repo")?;
     let mut config = load_file();
-
     if let Some(reference) = value_arg(args, "--integration-ref")? {
         let reference = reference.trim().to_string();
         if reference.is_empty() {
@@ -196,9 +198,9 @@ pub fn load_with_args(args: &[String]) -> Result<Config> {
     if args.iter().any(|a| a == "--no-size") {
         config.measure_disk = false;
     }
-    for path in values_arg(args, "--repo") {
-        config.only_repos.push(PathBuf::from(path));
-    }
+    config
+        .only_repos
+        .extend(only_repos.into_iter().map(PathBuf::from));
     Ok(config)
 }
 
@@ -312,8 +314,11 @@ fn value_arg(args: &[String], name: &str) -> Result<Option<String>> {
     Ok(found)
 }
 
-/// Every occurrence of a repeatable `--name <VALUE>`.
-fn values_arg(args: &[String], name: &str) -> Vec<String> {
+/// Every occurrence of a repeatable `--name <VALUE>` or `--name=<VALUE>`.
+///
+/// A split value that looks like another option is missing; callers can use
+/// the equals form when the value itself begins with a dash.
+fn values_arg(args: &[String], name: &str) -> Result<Vec<String>> {
     let flag = format!("{name}=");
     let mut found = Vec::new();
     let mut rest = args.iter();
@@ -321,12 +326,14 @@ fn values_arg(args: &[String], name: &str) -> Vec<String> {
         if let Some(value) = arg.strip_prefix(&flag) {
             found.push(value.to_string());
         } else if arg == name {
-            if let Some(value) = rest.next() {
-                found.push(value.clone());
-            }
+            let value = rest
+                .next()
+                .filter(|value| !value.starts_with('-'))
+                .ok_or_else(|| format!("{name} needs a value"))?;
+            found.push(value.clone());
         }
     }
-    found
+    Ok(found)
 }
 
 pub fn plugin_id() -> String {
@@ -395,4 +402,43 @@ fn xdg_dir(variable: &str, relative: &str) -> PathBuf {
 /// herdr injects empty strings for absent context, so empty means unset.
 pub fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::values_arg;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn repeatable_value_rejects_a_trailing_option() {
+        let err = values_arg(&args(&["--repo"]), "--repo")
+            .expect_err("a trailing --repo must be rejected");
+        assert_eq!(err.to_string(), "--repo needs a value");
+
+        let err = values_arg(&args(&["--repo", "--list"]), "--repo")
+            .expect_err("a verb is not a repository value");
+        assert_eq!(err.to_string(), "--repo needs a value");
+    }
+
+    #[test]
+    fn repeatable_values_retain_their_order_and_spelling() {
+        let values = values_arg(
+            &args(&["--repo", "/first", "--repo=/second", "--repo", "/third"]),
+            "--repo",
+        )
+        .expect("valid repository values");
+
+        assert_eq!(values, ["/first", "/second", "/third"]);
+    }
+
+    #[test]
+    fn equals_form_escapes_a_value_that_looks_like_an_option() {
+        let values =
+            values_arg(&args(&["--repo=--list"]), "--repo").expect("explicit repository value");
+
+        assert_eq!(values, ["--list"]);
+    }
 }
