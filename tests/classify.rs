@@ -210,6 +210,7 @@ fn a_dirty_worktree_names_what_is_at_risk() {
     assert_eq!(
         dirty.dirt,
         Dirt {
+            paths: 2,
             staged: 0,
             unstaged: 1,
             untracked: 1,
@@ -822,6 +823,7 @@ fn dirty_signals_quote_every_kind_of_dirt_in_significance_order() {
         Facts {
             worktree: bare_worktree(),
             dirt: Dirt {
+                paths: 14,
                 staged: 2,
                 unstaged: 3,
                 untracked: 4,
@@ -858,6 +860,7 @@ fn protected_signals_quote_pattern_precede_dirt_and_name_the_unblocking_action()
         Facts {
             worktree: bare_worktree(),
             dirt: Dirt {
+                paths: 1,
                 unstaged: 1,
                 ..Dirt::default()
             },

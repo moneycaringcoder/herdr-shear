@@ -83,6 +83,7 @@ impl Row {
 
     fn dirt(mut self, staged: usize, unstaged: usize, untracked: usize) -> Self {
         self.0.dirt = Dirt {
+            paths: staged + unstaged + untracked,
             staged,
             unstaged,
             untracked,
@@ -439,6 +440,28 @@ fn a_dirty_selection_gets_a_second_and_different_confirmation() {
     assert!(
         rendered.contains("files at risk: 12"),
         "and shows the number that has to be typed:\n{rendered}"
+    );
+}
+
+#[test]
+fn the_dirty_confirmation_aggregates_unique_paths_not_status_dimensions() {
+    let mut review = with_a_dirty_row();
+    review.inventory.candidates[DIRTY_REVIEW].dirt = Dirt {
+        paths: 1,
+        staged: 1,
+        unstaged: 1,
+        untracked: 0,
+        unmerged: 0,
+    };
+
+    let after = drive(review, &[Key::Remove, Key::Confirm]);
+    assert_eq!(
+        after.mode,
+        Mode::ConfirmDirty {
+            files: 1,
+            typed: String::new(),
+            worktrees: 1,
+        }
     );
 }
 

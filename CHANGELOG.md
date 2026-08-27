@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Dirty confirmations and `dirty_files` now count each at-risk path once when
+  both its staged and unstaged states changed.
 - `--repo` now rejects a missing value instead of silently widening the scan or
   consuming a following option as a repository path.
 - Repeated `--remove` paths that resolve to the same worktree are now removed

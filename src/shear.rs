@@ -176,6 +176,7 @@ pub fn scan(config: &Config) -> Result<Inventory> {
                     // Deliberately conservative: one unreadable file is enough
                     // to keep it out of every automatic selection.
                     crate::model::Dirt {
+                        paths: 1,
                         unstaged: 1,
                         ..Default::default()
                     }
