@@ -629,6 +629,151 @@ fn remove_without_a_path_is_an_error() {
     assert!(parse_remove_args(&args(&["--force-dirty", "--remove"])).is_err());
 }
 
+fn run_remove_cli(fixture: &Fixture, paths: &[&Path]) -> std::process::Output {
+    let state = arrange();
+    let config_dir = state.join("empty-config");
+    std::fs::create_dir_all(&config_dir).expect("create empty config directory");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shear"));
+    for path in paths {
+        command.arg("--remove").arg(path);
+    }
+    command
+        .arg("--repo")
+        .arg(&fixture.repo)
+        .arg("--no-size")
+        .env("HERDR_PLUGIN_CONFIG_DIR", config_dir)
+        .env("HERDR_SOCKET_PATH", state.join("missing.sock"))
+        .output()
+        .expect("run shear removal")
+}
+
+#[test]
+fn repeated_identical_paths_are_planned_removed_and_logged_once() {
+    arrange();
+    let fixture = Fixture::new("remove-identical-repeat");
+    let path = fixture.safe_worktree("same");
+
+    let output = run_remove_cli(&fixture, &[&path, &path]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("shear: removing 1 worktree:"),
+        "the plan counts the unique target: {stdout}"
+    );
+    assert!(!path.exists(), "the checkout is removed");
+
+    let logged = read_log()
+        .expect("read the undo log")
+        .into_iter()
+        .filter(|record| record.path == path.to_string_lossy())
+        .count();
+    assert_eq!(logged, 1, "the repeated target has one undo record");
+}
+
+#[test]
+fn equivalent_canonical_spellings_are_removed_and_logged_once() {
+    arrange();
+    let fixture = Fixture::new("remove-canonical-repeat");
+    let path = fixture.safe_worktree("same");
+    let equivalent = path.join(".");
+
+    let output = run_remove_cli(&fixture, &[&path, &equivalent]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("shear: removing 1 worktree:"),
+        "both spellings resolve to one planned target: {stdout}"
+    );
+    assert!(!path.exists(), "the checkout is removed");
+
+    let logged = read_log()
+        .expect("read the undo log")
+        .into_iter()
+        .filter(|record| record.path == path.to_string_lossy())
+        .count();
+    assert_eq!(logged, 1, "the resolved target has one undo record");
+}
+
+#[test]
+fn repeated_unknown_paths_produce_one_refusal_and_no_mutation() {
+    arrange();
+    let fixture = Fixture::new("remove-unknown-repeat");
+    let path = fixture.safe_worktree("bystander");
+    let unknown = fixture
+        .repo
+        .parent()
+        .expect("fixture repo has a parent")
+        .join("unknown-worktree");
+
+    let output = run_remove_cli(&fixture, &[&path, &unknown, &unknown]);
+    assert!(!output.status.success(), "an unknown target is refused");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let unknown_text = unknown.to_string_lossy();
+    assert_eq!(
+        stderr.matches(unknown_text.as_ref()).count(),
+        1,
+        "the repeated raw unknown has one clear refusal: {stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 2 selected worktrees refused; nothing was removed"),
+        "the failure count uses unique targets: {stderr}"
+    );
+    assert!(path.exists(), "batch preflight prevents the known removal");
+
+    let logged = read_log()
+        .expect("read the undo log")
+        .into_iter()
+        .any(|record| record.path == path.to_string_lossy());
+    assert!(
+        !logged,
+        "a batch refused in preflight writes no undo record"
+    );
+}
+
+#[test]
+fn distinct_targets_keep_the_first_requested_order() {
+    arrange();
+    let fixture = Fixture::new("remove-distinct-order");
+    let first = fixture.safe_worktree("first");
+    let second = fixture.safe_worktree("second");
+
+    let output = run_remove_cli(&fixture, &[&second, &first]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let second_position = stdout
+        .find(second.to_string_lossy().as_ref())
+        .expect("second target is in the plan");
+    let first_position = stdout
+        .find(first.to_string_lossy().as_ref())
+        .expect("first target is in the plan");
+    assert!(
+        second_position < first_position,
+        "the plan preserves first-request order: {stdout}"
+    );
+    assert!(
+        !first.exists() && !second.exists(),
+        "both checkouts are removed"
+    );
+
+    let paths: Vec<String> = read_log()
+        .expect("read the undo log")
+        .into_iter()
+        .map(|record| record.path)
+        .filter(|path| {
+            path == first.to_string_lossy().as_ref() || path == second.to_string_lossy().as_ref()
+        })
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        ],
+        "newest-first log order reflects execution in first-request order"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Real removals, against real repositories
 // ---------------------------------------------------------------------------
