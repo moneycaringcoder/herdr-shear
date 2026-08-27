@@ -151,8 +151,8 @@ fn repo(root: &str, name: &str) -> Repo {
     }
 }
 
-/// Two repositories covering every [`Verdict`], every [`Class`], every [`Size`]
-/// state and all three [`Merged`] states.
+/// Two repositories covering every [`Verdict`], every [`Class`], every enabled
+/// sizing state and all three [`Merged`] states.
 fn full_inventory() -> Inventory {
     Inventory {
         repos: vec![repo(APP, "app"), repo(LONG, "very-long-name-for-a-repository")],
@@ -524,8 +524,9 @@ fn a_failed_measurement_never_reads_as_a_plausible_zero() {
 }
 
 #[test]
-fn the_five_size_states_are_five_different_cells() {
+fn all_six_size_states_have_honest_cells() {
     assert_eq!(size_cell(Size::Pending), "\u{2026}");
+    assert_eq!(size_cell(Size::Skipped), "-");
     assert_eq!(size_cell(Size::Gone), "-");
     assert_eq!(size_cell(Size::Failed), "?");
     assert_eq!(size_cell(Size::Bytes(0)), "0 B");
@@ -681,6 +682,33 @@ fn the_summary_counts_the_rows_it_could_not_measure() {
         rendered.contains("only the checkout goes"),
         "the safety sentence is under every table"
     );
+}
+
+#[test]
+fn a_skipped_list_summary_never_claims_zero_bytes_or_a_floor() {
+    let inventory = Inventory {
+        repos: vec![repo(APP, "app")],
+        candidates: vec![
+            Row::branch(APP, "/home/dev/repos/app-wt/safe", "safe")
+                .verdict(Verdict::Safe)
+                .size(Size::Skipped)
+                .build(),
+            Row::branch(APP, "/home/dev/repos/app-wt/keep", "keep")
+                .size(Size::Skipped)
+                .build(),
+        ],
+        notes: Vec::new(),
+    };
+
+    let rendered = summary(&inventory, 200);
+    assert!(
+        rendered
+            .contains("Disk measurement was skipped for 2 worktrees; no disk total is available."),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("0 B"), "{rendered}");
+    assert!(!rendered.contains("floor"), "{rendered}");
+    assert!(!rendered.contains("not measured"), "{rendered}");
 }
 
 #[test]

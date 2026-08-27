@@ -12,6 +12,11 @@ All notable changes to this project are documented here. The format follows
   consuming a following option as a repository path.
 - Repeated `--remove` paths that resolve to the same worktree are now removed
   and recorded once, while preserving the first-request order of distinct paths.
+- `--no-size` now settles every checkout's disk state as deliberately skipped
+  instead of leaving a measurement permanently pending. Text uses `-` without a
+  false `0 B` floor; inventory JSON uses `bytes: null` with
+  `size_state: "skipped"`; and report schema 2 distinguishes skipped rows from
+  incomplete or failed measurement.
 
 ## [0.1.2] - 2026-08-26
 

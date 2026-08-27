@@ -352,21 +352,31 @@ a total, because that is what makes anyone bother running a janitor in the first
 place. Sizes are the space actually occupied on disk (`st_blocks * 512`, what
 `du` reports), with hardlinks counted once and symlinks never followed.
 
-Four things a size column must not do, and does not:
+Five things a size column must not do, and does not:
 
 - A **failed** measurement renders `?`, never a plausible `0 B`.
 - A **pending** measurement renders a dot leader, because the pane draws before
   the walk finishes and a zero that later becomes 1.2 GB is a lie with a delay.
-- A **missing** checkout renders `-`: a prunable worktree reclaims nothing.
+- A **skipped** measurement renders `-`: `--no-size` requested no walk, so
+  nothing is pending and no byte total is implied.
+- A **missing** checkout also renders `-`: a prunable worktree reclaims nothing.
+  It remains distinct from skipped sizing in machine output.
 - A **provisional** figure — last run's measurement, drawn on the first frame
   while the walk re-measures — renders `~1.2 GB`, counts in no total, and is
   replaced by the walk. It is a claim about last time, never presented as a
   measurement.
 
 Totals only add up rows that were actually measured, and the summary says how
-many were not — "2 worktrees are not measured, so that figure is a floor,
-not an estimate" — rather than quietly undercounting. Byte figures are truncated
-rather than rounded, so the number never overstates what you get back.
+many pending, provisional, or failed rows were not — "2 worktrees are not
+measured, so that figure is a floor, not an estimate" — rather than quietly
+undercounting. Deliberately skipped rows instead suppress the disk total: no
+`0 B` value or floor is claimed. Byte figures are truncated rather than rounded,
+so the number never overstates what you get back.
+
+Machine output keeps the distinction explicit. Inventory JSON uses
+`bytes: null` and `size_state: "skipped"` for `--no-size`. Report schema 2 adds a
+`size_state` to each stale row and `total_skipped`/`reclaimable_skipped` counts
+per repository; skipped rows do not inflate its unmeasured counts.
 
 Last run's figures live in `sizes.jsonl` next to the undo log; deleting that
 file costs nothing but one run's provisional figures.

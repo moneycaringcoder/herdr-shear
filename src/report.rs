@@ -59,6 +59,8 @@ fn project(inventory: &Inventory, generated_at: SystemTime) -> serde_json::Value
             let mut reclaimable_unmeasured = 0usize;
             let mut total_bytes = 0u64;
             let mut total_unmeasured = 0usize;
+            let mut reclaimable_skipped = 0usize;
+            let mut total_skipped = 0usize;
 
             for candidate in &rows {
                 match candidate.verdict {
@@ -76,6 +78,12 @@ fn project(inventory: &Inventory, generated_at: SystemTime) -> serde_json::Value
                         }
                     }
                     Size::Gone => {}
+                    Size::Skipped => {
+                        total_skipped += 1;
+                        if candidate.verdict == Verdict::Safe {
+                            reclaimable_skipped += 1;
+                        }
+                    }
                     Size::Pending | Size::Provisional(_) | Size::Failed => {
                         total_unmeasured += 1;
                         if candidate.verdict == Verdict::Safe {
@@ -105,13 +113,15 @@ fn project(inventory: &Inventory, generated_at: SystemTime) -> serde_json::Value
                 "reclaimable_unmeasured": reclaimable_unmeasured,
                 "total_bytes": total_bytes,
                 "total_unmeasured": total_unmeasured,
+                "reclaimable_skipped": reclaimable_skipped,
+                "total_skipped": total_skipped,
                 "stale": stale,
             })
         })
         .collect::<Vec<_>>();
 
     json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": rfc3339_utc(generated_at),
         "notes": inventory.notes,
         "repositories": repositories,
@@ -136,6 +146,7 @@ fn stale_row(candidate: &Candidate, generated_at: SystemTime) -> serde_json::Val
         "merged": candidate.merged.as_bool(),
         "merged_against": candidate.merged.against(),
         "bytes": measured_bytes(candidate.size),
+        "size_state": size_state(candidate.size),
         "protected": candidate.is(Class::Protected),
     })
 }
@@ -145,6 +156,17 @@ fn measured_bytes(size: Size) -> Option<u64> {
         Size::Bytes(bytes) => Some(bytes),
         Size::Gone => Some(0),
         // A provisional figure is last run's claim, never a measurement.
-        Size::Pending | Size::Provisional(_) | Size::Failed => None,
+        Size::Pending | Size::Skipped | Size::Provisional(_) | Size::Failed => None,
+    }
+}
+
+fn size_state(size: Size) -> &'static str {
+    match size {
+        Size::Bytes(_) => "measured",
+        Size::Gone => "gone",
+        Size::Pending => "pending",
+        Size::Skipped => "skipped",
+        Size::Provisional(_) => "provisional",
+        Size::Failed => "failed",
     }
 }

@@ -261,6 +261,78 @@ fn a_measured_size_is_bytes_a_missing_one_is_gone_and_neither_is_a_plausible_zer
 }
 
 #[test]
+fn disabled_measurement_settles_every_row_as_skipped_and_never_starts_a_walk() {
+    let _guard = env_lock();
+    no_herdr();
+
+    let fixture = Fixture::new("sizes-skipped");
+    fixture.safe_worktree("safe");
+    let mut inventory = pipeline::scan(&Config {
+        measure_disk: false,
+        ..config_for(&fixture.repo)
+    })
+    .expect("scan");
+
+    assert!(
+        inventory
+            .candidates
+            .iter()
+            .all(|candidate| candidate.size == Size::Skipped),
+        "disabled sizing must settle during the scan, not remain pending"
+    );
+
+    disk::measure_all(&mut inventory, &AtomicBool::new(false));
+    assert!(
+        inventory
+            .candidates
+            .iter()
+            .all(|candidate| candidate.size == Size::Skipped),
+        "a generic sizing helper must not turn skipped rows into background work"
+    );
+}
+
+#[test]
+fn inventory_json_projects_every_size_state_without_inventing_bytes() {
+    let _guard = env_lock();
+    no_herdr();
+
+    let fixture = Fixture::new("json-size-states");
+    let path = fixture.safe_worktree("safe");
+    let mut inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+
+    let cases = [
+        (Size::Pending, "pending", serde_json::Value::Null),
+        (Size::Skipped, "skipped", serde_json::Value::Null),
+        (
+            Size::Provisional(41),
+            "provisional",
+            serde_json::Value::Null,
+        ),
+        (Size::Bytes(42), "measured", serde_json::json!(42)),
+        (Size::Gone, "gone", serde_json::json!(0)),
+        (Size::Failed, "failed", serde_json::Value::Null),
+    ];
+
+    for (size, state, bytes) in cases {
+        inventory
+            .candidates
+            .iter_mut()
+            .find(|candidate| candidate.path() == path)
+            .expect("safe row")
+            .size = size;
+        let json = pipeline::to_json(&inventory);
+        let row = json["worktrees"]
+            .as_array()
+            .expect("worktrees")
+            .iter()
+            .find(|row| row["path"] == path.to_string_lossy().as_ref())
+            .expect("safe row projection");
+        assert_eq!(row["size_state"], state, "{size:?}");
+        assert_eq!(row["bytes"], bytes, "{size:?}");
+    }
+}
+
+#[test]
 fn json_reports_unknown_as_null_rather_than_as_false() {
     let _guard = env_lock();
     no_herdr();

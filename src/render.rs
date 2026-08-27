@@ -325,7 +325,22 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
     let (safe_bytes, safe_unknown) = reclaimable(inventory.safe());
     let (total_bytes, total_unknown) = reclaimable(rows.iter());
     let safe_rows = inventory.safe().count();
-    let disk = if safe_rows == 0 {
+    let safe_skipped = inventory
+        .safe()
+        .filter(|candidate| candidate.size == Size::Skipped)
+        .count();
+    let total_skipped = rows
+        .iter()
+        .filter(|candidate| candidate.size == Size::Skipped)
+        .count();
+    let safe_unmeasured = safe_unknown.saturating_sub(safe_skipped);
+    let total_unmeasured = total_unknown.saturating_sub(total_skipped);
+    let disk = if !rows.is_empty() && total_skipped == rows.len() {
+        format!(
+            "Disk measurement was skipped for {}; no disk total is available.",
+            plural(rows.len(), "worktree", "worktrees"),
+        )
+    } else if safe_rows == 0 {
         format!(
             "Nothing here is safe to remove without review. All {} occupy {}.",
             plural(rows.len(), "worktree", "worktrees"),
@@ -344,23 +359,30 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
 
     // A total that quietly omits the rows it could not measure is a total that
     // undercounts, so say how many rather than letting the number lie.
-    if total_unknown > 0 {
-        let unmeasured = if safe_unknown > 0 && safe_rows > 0 {
+    if total_unmeasured > 0 {
+        let unmeasured = if safe_unmeasured > 0 && safe_rows > 0 {
             format!(
                 "{} {} not measured ({} of them safe), so both figures are floors, not \
                  estimates.",
-                plural(total_unknown, "worktree", "worktrees"),
-                if total_unknown == 1 { "is" } else { "are" },
-                safe_unknown,
+                plural(total_unmeasured, "worktree", "worktrees"),
+                if total_unmeasured == 1 { "is" } else { "are" },
+                safe_unmeasured,
             )
         } else {
             format!(
                 "{} {} not measured, so that figure is a floor, not an estimate.",
-                plural(total_unknown, "worktree", "worktrees"),
-                if total_unknown == 1 { "is" } else { "are" },
+                plural(total_unmeasured, "worktree", "worktrees"),
+                if total_unmeasured == 1 { "is" } else { "are" },
             )
         };
         push_wrapped(&mut out, "", "", &unmeasured, width);
+    }
+    if total_skipped > 0 && total_skipped != rows.len() {
+        let skipped = format!(
+            "Disk measurement was skipped for {}; no size is claimed for them.",
+            plural(total_skipped, "worktree", "worktrees"),
+        );
+        push_wrapped(&mut out, "", "", &skipped, width);
     }
 
     // Use the same candidate-derived repository count the sentence above just
@@ -382,6 +404,18 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
                         .filter(|candidate| candidate.verdict == Verdict::Safe),
                 );
                 let (total_bytes, total_unknown) = reclaimable(group.iter().copied());
+                let safe_skipped = group
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.verdict == Verdict::Safe && candidate.size == Size::Skipped
+                    })
+                    .count();
+                let total_skipped = group
+                    .iter()
+                    .filter(|candidate| candidate.size == Size::Skipped)
+                    .count();
+                let safe_unknown = safe_unknown.saturating_sub(safe_skipped);
+                let total_unknown = total_unknown.saturating_sub(total_skipped);
                 Some((
                     root,
                     name,
@@ -391,13 +425,23 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
                     safe_unknown,
                     total_bytes,
                     total_unknown,
+                    total_skipped,
                 ))
             })
             .collect();
         by_repo.sort_by(|a, b| b.4.cmp(&a.4).then_with(|| a.0.cmp(b.0)));
 
-        for (_, name, row_count, safe_rows, safe_bytes, safe_unknown, total_bytes, total_unknown) in
-            by_repo
+        for (
+            _,
+            name,
+            row_count,
+            safe_rows,
+            safe_bytes,
+            safe_unknown,
+            total_bytes,
+            total_unknown,
+            total_skipped,
+        ) in by_repo
         {
             let safe_figure = format!(
                 "{}{}",
@@ -414,7 +458,12 @@ pub fn summary(inventory: &Inventory, columns: usize) -> String {
             } else {
                 String::new()
             };
-            let details = if safe_rows == 0 {
+            let details = if total_skipped == row_count {
+                format!(
+                    ": {}, {safe_rows} safe · disk measurement skipped",
+                    plural(row_count, "worktree", "worktrees"),
+                )
+            } else if safe_rows == 0 {
                 format!(
                     ": {}, {safe_rows} safe · nothing safe to remove · {total_figure} total{unmeasured}",
                     plural(row_count, "worktree", "worktrees"),
@@ -530,11 +579,10 @@ fn age_cell(candidate: &Candidate) -> String {
     }))
 }
 
-/// The disk cell.
-///
-/// The three non-numbers are deliberately distinct and none of them is a zero:
-/// a dot leader while the measurement is still running, a dash for a checkout
-/// that is not on disk at all, and `?` when the walk failed. A failed
+/// The non-numbers are deliberately distinct from a numeric zero: a dot leader
+/// while measurement is running, a dash when it was deliberately skipped or
+/// the checkout is absent, and `?` when the walk failed. Skipped and gone share
+/// a compact cell but remain distinct model and machine-output states. A failed
 /// measurement rendered as `0 B` would be a lie in the one column the user is
 /// about to make a decision on.
 ///
@@ -544,6 +592,7 @@ fn age_cell(candidate: &Candidate) -> String {
 pub fn size_cell(size: Size) -> String {
     match size {
         Size::Pending => DOT_LEADER.to_string(),
+        Size::Skipped => "-".to_string(),
         // Marked with a tilde: last run's figure, drawn while the walk
         // re-measures, and never presented as a measurement.
         Size::Provisional(bytes) => format!("~{}", human_bytes(bytes)),
