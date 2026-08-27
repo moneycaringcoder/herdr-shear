@@ -788,7 +788,8 @@ fn a_clean_worktree_goes_and_its_branch_and_commit_still_resolve() {
     let oid = fixture.git(&fixture.repo, &["rev-parse", "safe-branch"]);
     let tree = fixture.git(&fixture.repo, &["rev-parse", "safe-branch^{tree}"]);
 
-    let candidate = candidate(&path, &fixture.repo, Some("safe-branch"), Some(&oid));
+    let mut candidate = candidate(&path, &fixture.repo, Some("safe-branch"), Some(&oid));
+    candidate.size = Size::Skipped;
     let record = remove_one(&candidate, Permissions::default(), None, &config())
         .expect("a clean worktree needs no permissions");
 
@@ -811,6 +812,10 @@ fn a_clean_worktree_goes_and_its_branch_and_commit_still_resolve() {
     );
     assert_eq!(record.route, "git");
     assert_eq!(record.head_oid.as_deref(), Some(oid.as_str()));
+    assert_eq!(
+        record.bytes_reclaimed, None,
+        "deliberately skipped measurement must not be logged as zero bytes"
+    );
 }
 
 #[test]

@@ -962,13 +962,13 @@ fn record_for(candidate: &Candidate, route: RemovalRoute) -> RemovalRecord {
             .map(|class| class.label().to_string())
             .collect(),
         verdict: candidate.verdict.label().to_string(),
-        // A pending or failed measurement contributes nothing rather than a
+        // Only a completed measurement contributes bytes. Deliberately skipped,
+        // pending, provisional, or failed sizing is never recorded as a
         // plausible zero; `Gone` genuinely reclaims nothing.
         bytes_reclaimed: match candidate.size {
             Size::Bytes(bytes) => Some(bytes),
             Size::Gone => Some(0),
-            // A provisional figure is last run's claim, never a measurement.
-            Size::Pending | Size::Provisional(_) | Size::Failed => None,
+            Size::Pending | Size::Skipped | Size::Provisional(_) | Size::Failed => None,
         },
         restore_command: restore_command(candidate),
     }

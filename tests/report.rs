@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use shear::config::{self, Config, StaleRule, StaleWhen};
-use shear::model::Class;
+use shear::model::{Class, Size};
 use shear::{disk, report, shear as pipeline};
 
 use fixtures::Fixture;
@@ -114,7 +114,7 @@ fn document_is_one_versioned_json_object() {
     let parsed: serde_json::Value = serde_json::from_str(&encoded).expect("parse report");
 
     assert!(parsed.is_object(), "the report is one JSON object");
-    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["schema_version"], 2);
     assert!(parsed["generated_at"]
         .as_str()
         .is_some_and(|timestamp| timestamp.ends_with('Z')));
@@ -226,23 +226,61 @@ fn unknown_tip_time_is_null_and_never_a_plausible_zero() {
 }
 
 #[test]
-fn unmeasured_size_is_null_and_never_a_plausible_zero() {
+fn skipped_size_is_null_without_being_reported_as_pending_or_failed() {
     let _guard = env_lock();
     fixtures::pin_git_env();
     no_herdr();
 
-    let fixture = Fixture::new("report-unmeasured");
+    let fixture = Fixture::new("report-skipped");
     let stale = fixture.stale_worktree("stale", 45);
     let report = document(&Config {
         measure_disk: false,
         ..config_for(&fixture.repo)
     });
 
-    let bytes = &stale_row_at(&report, &stale)["bytes"];
-    assert!(bytes.is_null());
-    assert_ne!(bytes, 0);
+    let row = stale_row_at(&report, &stale);
+    assert!(row["bytes"].is_null());
+    assert_ne!(row["bytes"], 0);
+    assert_eq!(row["size_state"], "skipped");
     let repository = repository_at(&report, &fixture.repo);
-    assert_eq!(repository["total_unmeasured"], repository["worktree_count"]);
+    assert_eq!(repository["total_unmeasured"], 0);
+    assert_eq!(repository["total_skipped"], repository["worktree_count"]);
+}
+
+#[test]
+fn stale_rows_project_every_size_state_explicitly() {
+    let _guard = env_lock();
+    fixtures::pin_git_env();
+    no_herdr();
+
+    let fixture = Fixture::new("report-size-states");
+    let stale = fixture.stale_worktree("stale", 45);
+    let mut inventory = pipeline::scan(&config_for(&fixture.repo)).expect("scan");
+    let cases = [
+        (Size::Pending, "pending", serde_json::Value::Null),
+        (Size::Skipped, "skipped", serde_json::Value::Null),
+        (
+            Size::Provisional(41),
+            "provisional",
+            serde_json::Value::Null,
+        ),
+        (Size::Bytes(42), "measured", serde_json::json!(42)),
+        (Size::Gone, "gone", serde_json::json!(0)),
+        (Size::Failed, "failed", serde_json::Value::Null),
+    ];
+
+    for (size, state, bytes) in cases {
+        inventory
+            .candidates
+            .iter_mut()
+            .find(|candidate| candidate.path() == stale)
+            .expect("stale row")
+            .size = size;
+        let report = report::to_json(&inventory);
+        let row = stale_row_at(&report, &stale);
+        assert_eq!(row["size_state"], state, "{size:?}");
+        assert_eq!(row["bytes"], bytes, "{size:?}");
+    }
 }
 
 #[test]
@@ -419,7 +457,7 @@ fn non_repository_scope_is_a_well_formed_empty_report_with_a_note() {
 
     report::run_report(&config).expect("an empty report is successful");
     let report = document(&config);
-    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["schema_version"], 2);
     assert!(report["repositories"]
         .as_array()
         .expect("repositories")

@@ -113,14 +113,17 @@ fn count(meta: &std::fs::Metadata, _seen: &mut HashSet<(u64, u64)>, total: &mut 
     }
 }
 
-/// Measures every candidate in the inventory, in parallel, and writes the
-/// results back. Used by `--list` and `--json`, which have no incremental
-/// rendering to keep responsive.
+/// Measures every non-skipped candidate in the inventory, in parallel, and
+/// writes the results back. Used by `--list` and `--json`, which have no
+/// incremental rendering to keep responsive. A skipped row is deliberate and
+/// must never become background work merely because this helper was called.
 pub fn measure_all(inventory: &mut Inventory, cancel: &AtomicBool) {
-    let paths: Vec<PathBuf> = inventory
+    let paths: Vec<(usize, PathBuf)> = inventory
         .candidates
         .iter()
-        .map(|candidate| candidate.worktree.path.clone())
+        .enumerate()
+        .filter(|(_, candidate)| candidate.size != Size::Skipped)
+        .map(|(index, candidate)| (index, candidate.worktree.path.clone()))
         .collect();
     if paths.is_empty() {
         return;
@@ -144,7 +147,7 @@ pub fn measure_all(inventory: &mut Inventory, cancel: &AtomicBool) {
                 if index >= paths.len() || cancel.load(Ordering::Relaxed) {
                     return;
                 }
-                let size = measure(&paths[index], cancel);
+                let size = measure(&paths[index].1, cancel);
                 *sizes[index]
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = size;
@@ -152,8 +155,9 @@ pub fn measure_all(inventory: &mut Inventory, cancel: &AtomicBool) {
         }
     });
 
-    for (candidate, size) in inventory.candidates.iter_mut().zip(sizes) {
-        candidate.size = size.into_inner().unwrap_or_else(|p| p.into_inner());
+    for ((candidate_index, _), size) in paths.into_iter().zip(sizes) {
+        inventory.candidates[candidate_index].size =
+            size.into_inner().unwrap_or_else(|p| p.into_inner());
     }
 }
 
@@ -257,8 +261,9 @@ pub fn remember(inventory: &Inventory, cache: &Path) {
 }
 
 /// Human-readable size for the table: `1.2 GB`, `340 MB`, `12 kB`, `~1.2 GB`
-/// for a previous run's figure while the walk re-measures, `-` for a path that
-/// is gone, `…` while pending, `?` when the walk failed.
+/// for a previous run's figure while the walk re-measures, `-` when measurement
+/// was deliberately skipped or the path is gone, `…` while pending, and `?`
+/// when the walk failed.
 ///
 /// Units are powers of 1024 with SI-style suffixes, matching what `du -h`
 /// prints, because that is the command a user will check this against.
@@ -268,6 +273,7 @@ pub fn human(size: Size) -> String {
     let bytes = match size {
         Size::Bytes(bytes) => bytes,
         Size::Gone => return "-".to_string(),
+        Size::Skipped => return "-".to_string(),
         // Marked, because it is a claim about last time: the walk replaces it.
         Size::Provisional(bytes) => return format!("~{}", human(Size::Bytes(bytes))),
         Size::Pending => return "…".to_string(),

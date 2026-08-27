@@ -13,14 +13,15 @@ use crate::config::{self, Config};
 use crate::disk;
 use crate::git;
 use crate::herdr::{self, Herdr};
-use crate::model::{Inventory, Merged, OpenWorkspace, Repo, RepoKey};
+use crate::model::{Inventory, Merged, OpenWorkspace, Repo, RepoKey, Size};
 use crate::Result;
 
 /// Scans every repository in scope and classifies every worktree in each.
 ///
-/// Disk sizes are left [`crate::model::Size::Pending`]; call
-/// [`crate::disk::measure_all`] or let the review pane fill them in behind the
-/// rendering.
+/// Disk sizes start [`crate::model::Size::Pending`] when measurement is enabled
+/// and settle to [`crate::model::Size::Skipped`] during the scan when it is
+/// disabled. Enabled callers may use [`crate::disk::measure_all`] or let the
+/// review pane fill pending sizes in behind the rendering.
 pub fn scan(config: &Config) -> Result<Inventory> {
     let mut inventory = Inventory::default();
 
@@ -257,9 +258,11 @@ pub fn scan(config: &Config) -> Result<Inventory> {
             // the merge and upstream facts; the classifier stays a pure
             // function of one threshold.
             let stale_after = config.stale_after_for(&facts.merged, &facts.upstream);
-            inventory
-                .candidates
-                .push(classify::classify(facts, stale_after, now));
+            let mut candidate = classify::classify(facts, stale_after, now);
+            if !config.measure_disk {
+                candidate.size = Size::Skipped;
+            }
+            inventory.candidates.push(candidate);
         }
     }
     let protected = inventory
@@ -538,14 +541,18 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
                 "bytes": match candidate.size {
                     Size::Bytes(bytes) => json!(bytes),
                     Size::Gone => json!(0),
-                    // A provisional figure is last run's claim, never a
-                    // measurement; a script must not treat it as one.
-                    Size::Pending | Size::Provisional(_) | Size::Failed => serde_json::Value::Null,
+                    // Neither a remembered claim nor an unfinished, skipped, or
+                    // failed walk is a measurement a script may trust.
+                    Size::Pending
+                    | Size::Skipped
+                    | Size::Provisional(_)
+                    | Size::Failed => serde_json::Value::Null,
                 },
                 "size_state": match candidate.size {
                     Size::Bytes(_) => "measured",
                     Size::Gone => "gone",
                     Size::Pending => "pending",
+                    Size::Skipped => "skipped",
                     Size::Provisional(_) => "provisional",
                     Size::Failed => "failed",
                 },
@@ -557,8 +564,9 @@ pub fn to_json(inventory: &Inventory) -> serde_json::Value {
 }
 
 /// Total bytes a set of candidates would reclaim. Only `Size::Bytes` counts:
-/// a pending or failed measurement contributes nothing rather than a plausible
-/// zero, and the caller is expected to say how many rows were not counted.
+/// pending, skipped, provisional, and failed sizing contributes nothing rather
+/// than a plausible zero, and the caller is expected to distinguish why rows
+/// were not counted when presenting the result.
 pub fn reclaimable<'a>(
     candidates: impl Iterator<Item = &'a crate::model::Candidate>,
 ) -> (u64, usize) {
@@ -568,9 +576,10 @@ pub fn reclaimable<'a>(
         match candidate.size {
             crate::model::Size::Bytes(n) => bytes = bytes.saturating_add(n),
             crate::model::Size::Gone => {}
-            // Counted as unknown, never as its figure: provisional is a claim
-            // about last time, and this total is what a confirmation shows.
+            // Counted as unknown, never as a figure. Presentation distinguishes
+            // deliberate skipping from an unfinished or failed measurement.
             crate::model::Size::Pending
+            | crate::model::Size::Skipped
             | crate::model::Size::Provisional(_)
             | crate::model::Size::Failed => unknown += 1,
         }

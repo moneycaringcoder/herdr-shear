@@ -636,13 +636,28 @@ fn selection_line(review: &Review) -> String {
         return "nothing selected".to_string();
     }
     let (bytes, unknown) = crate::shear::reclaimable(review.selection());
-    let mut line = format!(
-        "{} selected \u{b7} {}",
-        review.selected.len(),
-        render::human_bytes(bytes)
-    );
-    if unknown > 0 {
-        line.push_str(&format!(" \u{b7} {unknown} not measured"));
+    let skipped = review
+        .selection()
+        .filter(|candidate| candidate.size == Size::Skipped)
+        .count();
+    let unmeasured = unknown.saturating_sub(skipped);
+    let mut line = if skipped == review.selected.len() {
+        format!(
+            "{} selected \u{b7} disk size skipped",
+            review.selected.len()
+        )
+    } else {
+        format!(
+            "{} selected \u{b7} {}",
+            review.selected.len(),
+            render::human_bytes(bytes)
+        )
+    };
+    if unmeasured > 0 {
+        line.push_str(&format!(" \u{b7} {unmeasured} not measured"));
+    }
+    if skipped > 0 && skipped != review.selected.len() {
+        line.push_str(&format!(" \u{b7} {skipped} size skipped"));
     }
     let (files, worktrees) = review.at_risk();
     if files > 0 {
@@ -657,14 +672,31 @@ fn mode_lines(review: &Review, width: usize) -> Vec<String> {
     match &review.mode {
         Mode::ConfirmClean { count, bytes } => {
             let (_, unknown) = crate::shear::reclaimable(review.selection());
-            let mut ask = format!(
-                "Remove {count} {} and reclaim {}?",
-                if *count == 1 { "worktree" } else { "worktrees" },
-                render::human_bytes(*bytes),
-            );
-            if unknown > 0 {
+            let skipped = review
+                .selection()
+                .filter(|candidate| candidate.size == Size::Skipped)
+                .count();
+            let unmeasured = unknown.saturating_sub(skipped);
+            let mut ask = if skipped == *count {
+                format!(
+                    "Remove {count} {}? Disk measurement was skipped.",
+                    if *count == 1 { "worktree" } else { "worktrees" },
+                )
+            } else {
+                format!(
+                    "Remove {count} {} and reclaim {}?",
+                    if *count == 1 { "worktree" } else { "worktrees" },
+                    render::human_bytes(*bytes),
+                )
+            };
+            if unmeasured > 0 {
                 ask.push_str(&format!(
-                    " ({unknown} of them was not measured, so the real figure is larger.)"
+                    " ({unmeasured} of them was not measured, so the real figure is larger.)"
+                ));
+            }
+            if skipped > 0 && skipped != *count {
+                ask.push_str(&format!(
+                    " Size measurement was skipped for {skipped} of them."
                 ));
             }
             let mut lines = render::wrap(&ask, width);

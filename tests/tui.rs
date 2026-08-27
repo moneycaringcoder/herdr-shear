@@ -734,6 +734,31 @@ fn an_unmeasured_row_is_counted_rather_than_ignored() {
 }
 
 #[test]
+fn a_skipped_selection_never_claims_zero_reclaimable_bytes() {
+    let mut state = review();
+    for candidate in &mut state.inventory.candidates {
+        candidate.size = Size::Skipped;
+    }
+    state.selected = BTreeSet::from([SAFE_A, SAFE_B]);
+
+    let rendered = frame(&state, 80, 24);
+    assert!(
+        rendered.contains("2 selected \u{b7} disk size skipped"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("2 selected \u{b7} 0 B"), "{rendered}");
+
+    let state = apply(state, Key::Remove);
+    let rendered = frame(&state, 80, 24);
+    let flattened = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flattened.contains("Remove 2 worktrees? Disk measurement was skipped."),
+        "{rendered}"
+    );
+    assert!(!flattened.contains("reclaim 0 B"), "{rendered}");
+}
+
+#[test]
 fn the_pane_shows_why_the_cursor_row_is_what_it_is() {
     let state = drive(review(), &[Key::Down]);
     let rendered = frame(&state, 80, 24);

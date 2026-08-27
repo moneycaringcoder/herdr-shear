@@ -234,6 +234,9 @@ pub enum Size {
     /// Not measured yet.
     #[default]
     Pending,
+    /// Disk measurement was deliberately disabled. No walk is pending, and no
+    /// byte total may be inferred from this state.
+    Skipped,
     /// The figure from a previous run, drawn while the walk re-measures. It
     /// might be wrong, so it renders marked, counts in no total, and is
     /// replaced by the walk — never trusted, only shown.
