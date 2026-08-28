@@ -11,7 +11,7 @@ repository = "https://github.com/moneycaringcoder/herdr-shear"
 # what every command in herdr-plugin.toml points at.
 
 [dependencies]
-crook = { git = "https://github.com/moneycaringcoder/herdr-crook", rev = "b3b154053be085f0aa343cd3eeeb903d5982ad0a" }
+crook = { git = "https://github.com/moneycaringcoder/herdr-crook", tag = "v0.2.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 crossterm = "0.29"
