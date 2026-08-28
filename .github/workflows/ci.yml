@@ -17,12 +17,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       # The git layer shells out to real git, and the fixtures create real
       # commits, so git needs an identity on the runner.
@@ -44,3 +44,19 @@ jobs:
 
       - name: Release build
         run: cargo build --release --locked
+
+  minimum-rust:
+    name: minimum Rust (1.88.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust 1.88.0
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: minimum-rust
+
+      - name: Test
+        run: cargo +1.88.0 test --all-targets --locked
