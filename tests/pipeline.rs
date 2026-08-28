@@ -174,6 +174,12 @@ impl FakeHerdr {
         self.select_plugin_raw(plugin_root, &context.to_string());
     }
 
+    fn select_plugin_without_context(&self, plugin_root: &Path) {
+        self.select();
+        std::env::set_var("HERDR_PLUGIN_ID", "moneycaringcoder.shear");
+        std::env::set_var("HERDR_PLUGIN_ROOT", plugin_root);
+    }
+
     fn select_plugin_raw(&self, plugin_root: &Path, context: &str) {
         std::env::set_var("HERDR_SOCKET_PATH", &self.socket);
         std::env::set_var("HERDR_PLUGIN_ID", "moneycaringcoder.shear");
@@ -211,6 +217,30 @@ fn snapshot_without_worktree() -> serde_json::Value {
         "workspaces": [{
             "workspace_id": "w-context",
             "label": "user-repository"
+        }],
+        "panes": []
+    })
+}
+
+/// Herdr 0.8.0's session snapshot is still authoritative when invocation
+/// context carries identity but no cwd fields.
+fn snapshot_with_worktree(repo: &Path) -> serde_json::Value {
+    let key = shear::git::repo_key(repo, Config::default().git_timeout)
+        .expect("read fixture repository identity");
+    serde_json::json!({
+        "workspaces": [{
+            "workspace_id": "w-legacy",
+            "label": "legacy-user-repository",
+            "worktree": {
+                "repo_key": key.0,
+                "repo_name": repo
+                    .file_name()
+                    .expect("fixture repo name")
+                    .to_string_lossy(),
+                "repo_root": repo,
+                "checkout_path": repo,
+                "is_linked_worktree": false
+            }
         }],
         "panes": []
     })
@@ -509,6 +539,53 @@ fn herdr_0_8_2_context_discovers_the_user_repo_without_snapshot_worktree_metadat
 }
 
 #[test]
+fn herdr_0_8_0_id_only_context_preserves_session_discovery_and_safety() {
+    let _guard = env_lock();
+    let installed_plugin = Fixture::new("legacy-plugin-root");
+    let plugin_candidate = installed_plugin.safe_worktree("plugin-candidate");
+    let user_repo = Fixture::new("legacy-user-repo");
+    let user_candidate = user_repo.safe_worktree("user-candidate");
+    let server = FakeHerdr::with_snapshot(
+        InjectedFailure::None,
+        snapshot_with_worktree(&user_repo.repo),
+    );
+    server.select_plugin(
+        &installed_plugin.repo,
+        &serde_json::json!({
+            "workspace_id": "w-legacy",
+            "focused_pane_id": "p-legacy"
+        }),
+    );
+
+    let inventory = pipeline::scan(&Config {
+        integration_ref: Some("main".into()),
+        ..Config::default()
+    })
+    .expect("legacy-compatible scan");
+    let row = inventory.find(&user_candidate).expect("user candidate");
+
+    assert_eq!(row.verdict, Verdict::Safe);
+    assert!(shear::tui::preselectable(row));
+    assert!(inventory.find(&plugin_candidate).is_none());
+    assert_eq!(
+        inventory
+            .repos
+            .iter()
+            .map(|repo| repo.root.as_path())
+            .collect::<Vec<_>>(),
+        vec![user_repo.repo.as_path()]
+    );
+    assert!(
+        inventory.notes.iter().any(|note| {
+            note.contains("Herdr 0.8.0-compatible session repository discovery")
+                && note.contains("plugin process directory was not used")
+        }),
+        "{:?}",
+        inventory.notes
+    );
+}
+
+#[test]
 fn explicit_repo_replaces_installed_plugin_context_scope() {
     let _guard = env_lock();
     let server = FakeHerdr::with_snapshot(InjectedFailure::None, snapshot_without_worktree());
@@ -562,6 +639,31 @@ fn malformed_plugin_context_keeps_explicit_rows_fail_closed() {
             .iter()
             .any(|note| note.contains("HERDR_PLUGIN_CONTEXT_JSON")
                 && note.contains("cannot be classified safe")),
+        "{:?}",
+        inventory.notes
+    );
+}
+
+#[test]
+fn installed_plugin_without_context_keeps_explicit_rows_fail_closed() {
+    let _guard = env_lock();
+    let server = FakeHerdr::new(InjectedFailure::None);
+    let installed_plugin = Fixture::new("missing-context-plugin-root");
+    let explicit = Fixture::new("missing-context-explicit");
+    let safe = explicit.safe_worktree("safe");
+    server.select_plugin_without_context(&installed_plugin.repo);
+
+    let inventory = pipeline::scan(&config_for(&explicit.repo)).expect("explicit scan");
+    let row = inventory.find(&safe).expect("explicit row");
+
+    assert_eq!(row.verdict, Verdict::Review);
+    assert!(!shear::tui::preselectable(row));
+    assert_eq!(inventory.safe().count(), 0);
+    assert!(
+        inventory.notes.iter().any(|note| {
+            note.contains("without HERDR_PLUGIN_CONTEXT_JSON")
+                && note.contains("cannot be classified safe")
+        }),
         "{:?}",
         inventory.notes
     );

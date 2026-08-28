@@ -365,6 +365,18 @@ fn discover(
             (None, true)
         }
     };
+    let installed_without_context = plugin_context.is_none()
+        && !malformed_plugin_context
+        && (plugin_root.is_some() || config::non_empty_env("HERDR_PLUGIN_ID").is_some());
+    if installed_without_context {
+        herdr_visibility = HerdrVisibility::Incomplete;
+        notes.push(
+            "Herdr invoked the installed plugin without HERDR_PLUGIN_CONTEXT_JSON; repository \
+             discovery is incomplete, so affected worktrees cannot be classified safe; the \
+             plugin process directory was not used"
+                .into(),
+        );
+    }
 
     // `--repo` narrows which repositories are scanned. It does not make the
     // session's workspaces stop existing, so the snapshot is still read for
@@ -444,12 +456,10 @@ fn discover(
                 .map(|path| ("focused pane cwd", path));
             let workspace = context.workspace_cwd().map(|path| ("workspace cwd", path));
             if focused.is_none() && workspace.is_none() {
-                herdr_visibility = HerdrVisibility::Incomplete;
                 notes.push(
-                    "HERDR_PLUGIN_CONTEXT_JSON names neither a focused pane cwd nor a \
-                     workspace cwd; repository discovery is incomplete, so affected \
-                     worktrees cannot be classified safe; the plugin process directory \
-                     was not used"
+                    "HERDR_PLUGIN_CONTEXT_JSON has no focused pane cwd or workspace cwd; \
+                     continuing with Herdr 0.8.0-compatible session repository discovery; \
+                     the plugin process directory was not used"
                         .into(),
                 );
             } else {
@@ -475,19 +485,9 @@ fn discover(
                 }
             }
         }
-        None if malformed_plugin_context => {}
+        None if malformed_plugin_context || installed_without_context => {}
         None => {
-            let invoked_by_herdr =
-                plugin_root.is_some() || config::non_empty_env("HERDR_PLUGIN_ID").is_some();
-            if invoked_by_herdr {
-                herdr_visibility = HerdrVisibility::Incomplete;
-                notes.push(
-                    "Herdr invoked the installed plugin without HERDR_PLUGIN_CONTEXT_JSON; \
-                     repository discovery is incomplete, so affected worktrees cannot be \
-                     classified safe; the plugin process directory was not used"
-                        .into(),
-                );
-            } else if let Ok(cwd) = std::env::current_dir() {
+            if let Ok(cwd) = std::env::current_dir() {
                 push_repo_at(&cwd, config, &mut repos, notes);
             }
         }
