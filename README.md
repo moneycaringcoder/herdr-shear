@@ -273,11 +273,29 @@ shear --restore 3
 shear --undo-log
 ```
 
+The installed plugin's front door is the `open-review` action. A herdr
+keybinding can open the overlay directly with:
+
+```toml
+type = "plugin_action"
+command = "moneycaringcoder.shear.open-review"
+```
+
+
 ### In the review pane
+
+The pane is a ratatui view that inherits the terminal theme rather than
+painting ordinary text with a fixed foreground. Verdict tags are green,
+yellow, cyan, and red; the cursor reverses the whole row; selected worktrees
+carry filled `[x]` checkboxes; and both confirmations appear as bordered
+modals over the inventory.
+
 
 ```
   ↑ / k        previous row
   ↓ / j        next row
+  mouse wheel  previous / next row
+  left click   move the cursor (never toggle selection)
   space        toggle the row under the cursor
   a            select every `safe` row, and nothing else
   n            clear the selection

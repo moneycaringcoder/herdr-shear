@@ -35,6 +35,17 @@ title = "Shear: review worktrees"
 placement = "overlay"
 command = ["./target/release/shear", "--review"]
 
+# Opening the review pane is the plugin's front door, and herdr keybindings can
+# only target actions — so the front door is an action. It calls back into herdr
+# through HERDR_BIN_PATH to open the pane entrypoint above, which lets a user
+# bind it: type = "plugin_action", command = "moneycaringcoder.shear.open-review".
+[[actions]]
+id = "open-review"
+title = "Shear: open review pane"
+description = "Open the interactive review pane for the current session."
+contexts = ["global", "workspace"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin moneycaringcoder.shear --entrypoint review"]
+
 [[actions]]
 id = "list"
 title = "Shear: list worktrees"
