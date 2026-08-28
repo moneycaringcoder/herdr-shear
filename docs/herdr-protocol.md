@@ -142,16 +142,17 @@ unchanged. Notes from the capture and live runs:
 Shear distinguishes three states rather than treating every empty Herdr join as
 the same fact:
 
-- A hand-run standalone scan, with neither `HERDR_PLUGIN_ID` nor a non-empty
-  `HERDR_SOCKET_PATH`, keeps the existing git-only `safe` rule.
+- A hand-run standalone scan, with no non-empty Herdr plugin/socket/context
+  marker, keeps the existing git-only `safe` rule.
 - A successful `session.snapshot` plus a successful `worktree.list` for a
   repository gives complete workspace and pane visibility for that repository.
-- Herdr context is expected when either `HERDR_PLUGIN_ID` or a non-empty
-  `HERDR_SOCKET_PATH` is present. If its socket cannot be reached, or a connected
-  socket fails `session.snapshot`, visibility is incomplete for every affected
-  row. If only one repository's `worktree.list` fails, visibility is incomplete
-  only for that repository. Herdr's `not_git_worktree` response remains data,
-  not a failed join, and does not demote the repository.
+- Herdr context is expected when any of `HERDR_PLUGIN_ID`, `HERDR_SOCKET_PATH`,
+  `HERDR_PLUGIN_CONTEXT_JSON`, or `HERDR_PLUGIN_ROOT` is non-empty. If its socket
+  cannot be reached, or a connected socket fails `session.snapshot`, visibility
+  is incomplete for every affected row. If only one repository's
+  `worktree.list` fails, visibility is incomplete only for that repository.
+  Herdr's `not_git_worktree` response remains data, not a failed join, and does
+  not demote the repository.
 
 Incomplete visibility can only narrow the answer: a clean, merged, gone-upstream
 row is `review`, never `safe`, and the inventory note names the failed operation.
@@ -159,15 +160,38 @@ It is not `blocked`, because the user must still be able to select and remove it
 explicitly after reading that warning. Repositories whose snapshot and
 `worktree.list` joins completed remain eligible for `safe`.
 
-This bookkeeping uses only `session.snapshot`, `snapshot.panes`, and
-`worktree.list` fields already present in Herdr 0.8.0. The minimum supported
-Herdr version remains **0.8.0**.
+The snapshot and worktree visibility bookkeeping uses fields already present in
+Herdr 0.8.0. Invocation cwd context improves repository discovery on Herdr
+0.8.2 without becoming mandatory for 0.8.0-compatible identity-only context,
+so the minimum supported Herdr version remains **0.8.0**.
 
 ## Plugin execution environment
 
 Commands are argv arrays run with **no shell**, cwd = plugin root, and a minimal
 `PATH` — `git` must be resolved explicitly rather than assumed. Plugins run on
 the **server** host.
+
+Herdr 0.8.2 also injects `HERDR_PLUGIN_ROOT` and
+`HERDR_PLUGIN_CONTEXT_JSON`. Crook parses the latter as the shared
+`PluginContext` contract: unknown JSON fields are ignored, known non-null
+fields must be strings, and cwd fields must be absolute paths. Empty environment
+values mean absent.
+
+For an installed action, scope is seeded from `focused_pane_cwd`, then
+`workspace_cwd` when the focused cwd is absent or unusable. The first readable
+git checkout wins. An unusable first cwd still marks visibility incomplete even
+when the fallback finds a repository, so discovery can recover the visible row
+without making it safe. The plugin root, any path beneath it, and the repository
+containing it are excluded from implicit discovery. `--repo` remains an
+explicit override.
+
+A valid identity-only context with neither cwd is the Herdr 0.8.0-compatible
+case: Shear keeps the repositories from `session.snapshot`, retains complete
+visibility when its Herdr queries succeeded, and does not inspect process cwd.
+Malformed or wrong-typed context, an installed invocation with no context, and
+a context whose cwd cannot identify a readable checkout are incomplete
+visibility. None falls back to process cwd. Process cwd discovery belongs only
+to a direct CLI invocation with no installed-plugin marker.
 
 `herdr plugin link .` does **not** run `[[build]]`; `herdr plugin install` does.
 

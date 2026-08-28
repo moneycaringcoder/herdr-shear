@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crook::client::{Client, Error as CrookError, RetrySafety};
-use crook::env::PluginEnv;
+use crook::env::{PluginContext, PluginContextError};
 use serde_json::{json, Value};
 
 use crate::config;
@@ -112,11 +112,19 @@ pub struct Removed {
     pub forced: bool,
 }
 
+/// Invocation context supplied by Herdr for an installed plugin action.
+///
+/// Keep this beside the socket wrapper so every use of Herdr's process
+/// environment goes through Crook's shared contract rather than reparsing its
+/// JSON independently.
+pub fn plugin_context() -> std::result::Result<Option<PluginContext>, PluginContextError> {
+    PluginContext::resolve()
+}
+
 impl Herdr {
     pub fn connect() -> Result<Self> {
-        let environment = PluginEnv::resolve(config::PLUGIN_ID);
-        let client =
-            Client::connect(environment.socket_path(), "shear").map_err(into_local_error)?;
+        let client = Client::connect(config::plugin_env().socket_path(), "shear")
+            .map_err(into_local_error)?;
         Ok(Self { client })
     }
 

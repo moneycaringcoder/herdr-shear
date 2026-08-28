@@ -337,9 +337,12 @@ fn values_arg(args: &[String], name: &str) -> Result<Vec<String>> {
     }
     Ok(found)
 }
+pub(crate) fn plugin_env() -> PluginEnv {
+    PluginEnv::resolve(PLUGIN_ID)
+}
 
 pub fn plugin_id() -> String {
-    PluginEnv::resolve(PLUGIN_ID).plugin_id().to_owned()
+    plugin_env().plugin_id().to_owned()
 }
 
 /// Where the undo log lives: `~/.local/state/herdr/plugins/<id>/`.
@@ -349,12 +352,12 @@ pub fn plugin_id() -> String {
 /// directory, or a removal made from a plugin action would not appear in the
 /// undo log a hand-run `--undo-log` reads.
 pub fn state_dir() -> PathBuf {
-    PluginEnv::resolve(PLUGIN_ID).state_dir().to_owned()
+    plugin_env().state_dir().to_owned()
 }
 
 /// Where the config file lives: `~/.config/herdr/plugins/config/<id>/`.
 pub fn config_dir() -> PathBuf {
-    PluginEnv::resolve(PLUGIN_ID).config_dir().to_owned()
+    plugin_env().config_dir().to_owned()
 }
 
 /// Append-only record of every removal shear successfully records.

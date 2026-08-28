@@ -66,16 +66,24 @@ removal whose record could not be written.
 
 The scan is read-only git plumbing (`worktree list`, `status --porcelain=v2`,
 `for-each-ref`) plus Herdr queries for the session's workspaces and panes and
-each repository's `open_workspace_id` values. A hand-run standalone scan (no
-`HERDR_PLUGIN_ID` and no non-empty `HERDR_SOCKET_PATH`) keeps the existing
-git-only safety rule when Herdr is absent. Either marker means Herdr context is
-expected. Once Herdr is expected, or the socket has answered, visibility must be
-complete before a row can be `safe`: a failed connection or `session.snapshot`
-demotes all affected rows, while a failed `worktree.list` demotes only that
-repository. Herdr's `not_git_worktree` answer is data, not a failed join. The
-on-screen note names actual missing visibility. These rows stay `review`, not
-`blocked`, so explicit selection and removal remain available; only bulk
-preselection is withheld.
+each repository's `open_workspace_id` values. Herdr 0.8.2 installed actions
+also seed repository discovery from `HERDR_PLUGIN_CONTEXT_JSON`: focused pane
+cwd first, then workspace cwd. The process cwd is reserved for a hand-run
+standalone scan, because Herdr runs an installed action from its plugin root;
+that root and its repository are never implicit targets. An explicit `--repo`
+still replaces discovery.
+
+A valid legacy context with identity but no cwd keeps Herdr 0.8.0-compatible
+`session.snapshot` discovery and does not by itself narrow safety. A malformed
+context, an installed action with no context, or context that cannot identify a
+readable git checkout never falls back to the plugin cwd and makes Herdr
+visibility incomplete. Once Herdr is expected, or the socket has answered,
+visibility must be complete before a row can be `safe`: a failed connection or
+`session.snapshot` demotes all affected rows, while a failed `worktree.list`
+demotes only that repository. Herdr's `not_git_worktree` answer is data, not a
+failed join. The on-screen note names actual missing visibility. These rows
+stay `review`, not `blocked`, so explicit selection and removal remain
+available; only bulk preselection is withheld.
 
 ```mermaid
 flowchart LR

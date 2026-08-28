@@ -24,8 +24,14 @@ use crate::Result;
 /// review pane fill pending sizes in behind the rendering.
 pub fn scan(config: &Config) -> Result<Inventory> {
     let mut inventory = Inventory::default();
-    let herdr_expected = config::non_empty_env("HERDR_PLUGIN_ID").is_some()
-        || config::non_empty_env("HERDR_SOCKET_PATH").is_some();
+    let herdr_expected = [
+        "HERDR_PLUGIN_ID",
+        "HERDR_SOCKET_PATH",
+        "HERDR_PLUGIN_CONTEXT_JSON",
+        "HERDR_PLUGIN_ROOT",
+    ]
+    .iter()
+    .any(|key| config::non_empty_env(key).is_some());
 
     // The herdr side is optional. Running the binary from a plain shell with
     // `--repo` is a supported way to use it, and a missing socket must degrade
@@ -333,9 +339,10 @@ struct Discovery {
 
 /// The repositories in scope, and the checkouts the session holds open.
 ///
-/// `--repo` replaces the session entirely; otherwise the session's repositories
-/// plus any `extra_repos` from the config file are scanned, plus the current
-/// directory's repository when there is one.
+/// `--repo` replaces discovery entirely. Otherwise the session and configured
+/// repositories are supplemented from Herdr's invocation context: focused pane
+/// cwd first, then workspace cwd. Process cwd is a direct-CLI fallback only;
+/// Herdr runs installed plugins from their own root, which is never a target.
 fn discover(
     config: &Config,
     client: Option<&mut Herdr>,
@@ -345,6 +352,31 @@ fn discover(
     let mut repos: Vec<Repo> = Vec::new();
     let mut open: BTreeMap<PathBuf, OpenWorkspace> = BTreeMap::new();
     let mut herdr_visibility = initial_herdr_visibility;
+    let plugin_root = config::plugin_env().plugin_root().map(Path::to_path_buf);
+    let (plugin_context, malformed_plugin_context) = match herdr::plugin_context() {
+        Ok(context) => (context, false),
+        Err(err) => {
+            herdr_visibility = HerdrVisibility::Incomplete;
+            notes.push(format!(
+                "could not read HERDR_PLUGIN_CONTEXT_JSON ({err}); repository discovery from \
+                 Herdr's focused pane and workspace is unavailable, so affected worktrees \
+                 cannot be classified safe; the plugin process directory was not used"
+            ));
+            (None, true)
+        }
+    };
+    let installed_without_context = plugin_context.is_none()
+        && !malformed_plugin_context
+        && (plugin_root.is_some() || config::non_empty_env("HERDR_PLUGIN_ID").is_some());
+    if installed_without_context {
+        herdr_visibility = HerdrVisibility::Incomplete;
+        notes.push(
+            "Herdr invoked the installed plugin without HERDR_PLUGIN_CONTEXT_JSON; repository \
+             discovery is incomplete, so affected worktrees cannot be classified safe; the \
+             plugin process directory was not used"
+                .into(),
+        );
+    }
 
     // `--repo` narrows which repositories are scanned. It does not make the
     // session's workspaces stop existing, so the snapshot is still read for
@@ -417,17 +449,47 @@ fn discover(
         push_repo_at(path, config, &mut repos, notes);
     }
 
-    // The current directory is included only when it could be the user's
-    // choice. herdr runs a plugin action with cwd set to the *plugin's* own
-    // directory, so including it there would put shear's own repository in
-    // every listing — a row nobody asked for, in a tool whose entire job is to
-    // be trusted about which rows matter. Running the binary from a shell is
-    // different: there, the repository you are standing in is the obvious one
-    // to mean.
-    let invoked_by_herdr = crate::config::non_empty_env("HERDR_PLUGIN_ID").is_some();
-    if !invoked_by_herdr || repos.is_empty() {
-        if let Ok(cwd) = std::env::current_dir() {
-            push_repo_at(&cwd, config, &mut repos, notes);
+    match plugin_context {
+        Some(context) => {
+            let focused = context
+                .focused_pane_cwd()
+                .map(|path| ("focused pane cwd", path));
+            let workspace = context.workspace_cwd().map(|path| ("workspace cwd", path));
+            if focused.is_none() && workspace.is_none() {
+                notes.push(
+                    "HERDR_PLUGIN_CONTEXT_JSON has no focused pane cwd or workspace cwd; \
+                     continuing with Herdr 0.8.0-compatible session repository discovery; \
+                     the plugin process directory was not used"
+                        .into(),
+                );
+            } else {
+                for (source, path) in [focused, workspace].into_iter().flatten() {
+                    if source == "workspace cwd"
+                        && context
+                            .focused_pane_cwd()
+                            .is_some_and(|focused| focused == path)
+                    {
+                        continue;
+                    }
+                    if push_context_repo_at(
+                        path,
+                        source,
+                        plugin_root.as_deref(),
+                        config,
+                        &mut repos,
+                        notes,
+                    ) {
+                        break;
+                    }
+                    herdr_visibility = HerdrVisibility::Incomplete;
+                }
+            }
+        }
+        None if malformed_plugin_context || installed_without_context => {}
+        None => {
+            if let Ok(cwd) = std::env::current_dir() {
+                push_repo_at(&cwd, config, &mut repos, notes);
+            }
         }
     }
 
@@ -453,6 +515,79 @@ fn push_repo_at(path: &Path, config: &Config, repos: &mut Vec<Repo>, notes: &mut
         }
         Err(err) => notes.push(format!("{}: {err}", path.display())),
     }
+}
+
+/// Adds the repository selected by Herdr's invocation context.
+///
+/// Failure is deliberately distinct from ordinary direct-CLI discovery: an
+/// installed action has named the repository it means, so falling back to the
+/// plugin's process cwd would scan the wrong checkout and could widen safety.
+fn push_context_repo_at(
+    path: &Path,
+    source: &str,
+    plugin_root: Option<&Path>,
+    config: &Config,
+    repos: &mut Vec<Repo>,
+    notes: &mut Vec<String>,
+) -> bool {
+    if plugin_root.is_some_and(|root| same_or_below(path, root)) {
+        notes.push(format!(
+            "Herdr {source} {} points at the installed plugin root; repository discovery is \
+             incomplete, so affected worktrees cannot be classified safe",
+            path.display()
+        ));
+        return false;
+    }
+
+    match git::repo_at(path, config.git_timeout) {
+        Ok(Some(repo)) => {
+            if plugin_root.is_some_and(|root| repo_is_plugin_root(&repo, root, config)) {
+                notes.push(format!(
+                    "Herdr {source} {} resolves to the installed plugin's repository; \
+                     repository discovery is incomplete, so affected worktrees cannot be \
+                     classified safe",
+                    path.display()
+                ));
+                false
+            } else {
+                push_repo(repo, repos);
+                true
+            }
+        }
+        Ok(None) => {
+            notes.push(format!(
+                "Herdr {source} {} is not inside a readable git checkout; repository discovery \
+                 is incomplete, so affected worktrees cannot be classified safe",
+                path.display()
+            ));
+            false
+        }
+        Err(err) => {
+            notes.push(format!(
+                "could not discover a repository from Herdr {source} {} ({err}); repository \
+                 discovery is incomplete, so affected worktrees cannot be classified safe",
+                path.display()
+            ));
+            false
+        }
+    }
+}
+
+fn same_or_below(path: &Path, root: &Path) -> bool {
+    path == root
+        || path.starts_with(root)
+        || match (path.canonicalize(), root.canonicalize()) {
+            (Ok(path), Ok(root)) => path == root || path.starts_with(root),
+            _ => false,
+        }
+}
+
+fn repo_is_plugin_root(repo: &Repo, plugin_root: &Path, config: &Config) -> bool {
+    same_or_below(plugin_root, &repo.root)
+        || git::repo_at(plugin_root, config.git_timeout)
+            .ok()
+            .flatten()
+            .is_some_and(|plugin_repo| plugin_repo.key == repo.key)
 }
 
 fn push_repo(repo: Repo, repos: &mut Vec<Repo>) {

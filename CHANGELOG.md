@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Installed Herdr actions now discover their repository from
+  `HERDR_PLUGIN_CONTEXT_JSON`, preferring the focused pane cwd and then the
+  workspace cwd, instead of scanning Herdr's plugin installation directory.
+  `--repo` remains authoritative. Herdr 0.8.0-compatible identity-only context
+  continues to use `session.snapshot` without weakening safe classification;
+  malformed context, an unusable context cwd, or a missing installed-plugin
+  context keeps visibility incomplete and prevents affected rows from becoming
+  `safe`.
+
 ## [0.2.0] - 2026-08-28
 
 ### Added
