@@ -40,6 +40,8 @@ fn env_lock() -> MutexGuard<'static, ()> {
 fn no_herdr() {
     std::env::remove_var("HERDR_SOCKET_PATH");
     std::env::remove_var("HERDR_PLUGIN_ID");
+    std::env::remove_var("HERDR_PLUGIN_CONTEXT_JSON");
+    std::env::remove_var("HERDR_PLUGIN_ROOT");
     std::env::set_var(
         "XDG_CONFIG_HOME",
         "/nonexistent/shear-pipeline-standalone-xdg",
@@ -63,6 +65,16 @@ struct FakeHerdr {
 
 impl FakeHerdr {
     fn new(failure: InjectedFailure) -> Self {
+        Self::with_snapshot(
+            failure,
+            serde_json::json!({
+                "workspaces": [],
+                "panes": []
+            }),
+        )
+    }
+
+    fn with_snapshot(failure: InjectedFailure, snapshot: serde_json::Value) -> Self {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join("shr-pipeline").join(format!(
             "{}-{}",
@@ -126,10 +138,7 @@ impl FakeHerdr {
                         "id": id,
                         "result": {
                             "type": "session_snapshot",
-                            "snapshot": {
-                                "workspaces": [],
-                                "panes": []
-                            }
+                            "snapshot": snapshot.clone()
                         }
                     })
                 } else {
@@ -157,6 +166,19 @@ impl FakeHerdr {
     fn select(&self) {
         std::env::set_var("HERDR_SOCKET_PATH", &self.socket);
         std::env::remove_var("HERDR_PLUGIN_ID");
+        std::env::remove_var("HERDR_PLUGIN_CONTEXT_JSON");
+        std::env::remove_var("HERDR_PLUGIN_ROOT");
+    }
+
+    fn select_plugin(&self, plugin_root: &Path, context: &serde_json::Value) {
+        self.select_plugin_raw(plugin_root, &context.to_string());
+    }
+
+    fn select_plugin_raw(&self, plugin_root: &Path, context: &str) {
+        std::env::set_var("HERDR_SOCKET_PATH", &self.socket);
+        std::env::set_var("HERDR_PLUGIN_ID", "moneycaringcoder.shear");
+        std::env::set_var("HERDR_PLUGIN_ROOT", plugin_root);
+        std::env::set_var("HERDR_PLUGIN_CONTEXT_JSON", context);
     }
 }
 
@@ -180,6 +202,18 @@ fn config_for(repo: &Path) -> Config {
         integration_ref: Some("main".into()),
         ..Config::default()
     }
+}
+
+/// Herdr 0.8.2 can identify the active workspace without attaching worktree
+/// metadata to it. The invocation context is then the only repository seed.
+fn snapshot_without_worktree() -> serde_json::Value {
+    serde_json::json!({
+        "workspaces": [{
+            "workspace_id": "w-context",
+            "label": "user-repository"
+        }],
+        "panes": []
+    })
 }
 
 fn verdict_at(inventory: &shear::model::Inventory, path: &Path) -> Verdict {
@@ -392,6 +426,227 @@ fn complete_herdr_visibility_preserves_safe_classification() {
     let row = inventory.find(&safe).expect("safe row");
     assert_eq!(row.verdict, Verdict::Safe);
     assert!(shear::tui::preselectable(row));
+}
+
+#[test]
+fn herdr_0_8_2_context_discovers_the_user_repo_without_snapshot_worktree_metadata() {
+    let _guard = env_lock();
+    let server = FakeHerdr::with_snapshot(InjectedFailure::None, snapshot_without_worktree());
+    let installed_plugin = Fixture::new("installed-plugin");
+    let plugin_candidate = installed_plugin.safe_worktree("plugin-candidate");
+    let user_repo = Fixture::new("context-user-repo");
+    let user_candidate = user_repo.safe_worktree("user-candidate");
+    let unusable_focus = server.dir.join("focused-outside-repo");
+    std::fs::create_dir_all(&unusable_focus).expect("create unusable focused cwd");
+
+    let contexts = [
+        (
+            "focused pane cwd",
+            Verdict::Safe,
+            serde_json::json!({
+                "workspace_id": "w-context",
+                "workspace_cwd": "/outside/fallback-must-not-win",
+                "focused_pane_id": "p-context",
+                "focused_pane_cwd": user_candidate
+            }),
+        ),
+        (
+            "workspace cwd",
+            Verdict::Safe,
+            serde_json::json!({
+                "workspace_id": "w-context",
+                "workspace_cwd": user_candidate,
+                "focused_pane_id": "p-context",
+                "focused_pane_cwd": null
+            }),
+        ),
+        (
+            "workspace fallback after unusable focused pane cwd",
+            Verdict::Review,
+            serde_json::json!({
+                "workspace_id": "w-context",
+                "workspace_cwd": user_candidate,
+                "focused_pane_id": "p-context",
+                "focused_pane_cwd": unusable_focus
+            }),
+        ),
+    ];
+
+    for (source, expected_verdict, context) in contexts {
+        server.select_plugin(&installed_plugin.repo, &context);
+        let inventory = pipeline::scan(&Config {
+            integration_ref: Some("main".into()),
+            ..Config::default()
+        })
+        .unwrap_or_else(|err| panic!("scan from {source}: {err}"));
+
+        assert_eq!(
+            inventory
+                .repos
+                .iter()
+                .map(|repo| repo.root.as_path())
+                .collect::<Vec<_>>(),
+            vec![user_repo.repo.as_path()],
+            "{source} must seed only the user repository"
+        );
+        assert!(
+            inventory.find(&user_candidate).is_some(),
+            "{source} did not expose the user's worktree"
+        );
+        assert_eq!(
+            inventory
+                .find(&user_candidate)
+                .expect("user candidate")
+                .verdict,
+            expected_verdict,
+            "{source} visibility"
+        );
+        assert!(
+            inventory.find(&plugin_candidate).is_none(),
+            "{source} exposed the installed plugin repository"
+        );
+    }
+}
+
+#[test]
+fn explicit_repo_replaces_installed_plugin_context_scope() {
+    let _guard = env_lock();
+    let server = FakeHerdr::with_snapshot(InjectedFailure::None, snapshot_without_worktree());
+    let installed_plugin = Fixture::new("explicit-plugin-root");
+    let contextual = Fixture::new("explicit-contextual");
+    let contextual_candidate = contextual.safe_worktree("contextual-candidate");
+    let explicit = Fixture::new("explicit-target");
+    let explicit_candidate = explicit.safe_worktree("explicit-candidate");
+    server.select_plugin(
+        &installed_plugin.repo,
+        &serde_json::json!({
+            "workspace_id": "w-context",
+            "workspace_cwd": contextual.repo,
+            "focused_pane_id": "p-context",
+            "focused_pane_cwd": contextual.repo
+        }),
+    );
+
+    let inventory = pipeline::scan(&config_for(&explicit.repo)).expect("explicit scan");
+
+    assert!(inventory.find(&explicit_candidate).is_some());
+    assert!(inventory.find(&contextual_candidate).is_none());
+    assert_eq!(
+        inventory
+            .repos
+            .iter()
+            .map(|repo| repo.root.as_path())
+            .collect::<Vec<_>>(),
+        vec![explicit.repo.as_path()]
+    );
+}
+
+#[test]
+fn malformed_plugin_context_keeps_explicit_rows_fail_closed() {
+    let _guard = env_lock();
+    let server = FakeHerdr::new(InjectedFailure::None);
+    let installed_plugin = Fixture::new("malformed-plugin-root");
+    let explicit = Fixture::new("malformed-explicit");
+    let safe = explicit.safe_worktree("safe");
+    server.select_plugin_raw(&installed_plugin.repo, r#"{"focused_pane_cwd":42}"#);
+
+    let inventory = pipeline::scan(&config_for(&explicit.repo)).expect("explicit scan");
+    let row = inventory.find(&safe).expect("explicit row");
+
+    assert_eq!(row.verdict, Verdict::Review);
+    assert!(!shear::tui::preselectable(row));
+    assert_eq!(inventory.safe().count(), 0);
+    assert!(
+        inventory
+            .notes
+            .iter()
+            .any(|note| note.contains("HERDR_PLUGIN_CONTEXT_JSON")
+                && note.contains("cannot be classified safe")),
+        "{:?}",
+        inventory.notes
+    );
+}
+
+#[test]
+fn context_outside_a_git_checkout_does_not_fall_back_to_plugin_cwd() {
+    let _guard = env_lock();
+    let server = FakeHerdr::with_snapshot(InjectedFailure::None, snapshot_without_worktree());
+    let outside = server.dir.join("not-a-repository");
+    std::fs::create_dir_all(&outside).expect("create non-repository context cwd");
+    let installed_plugin = Fixture::new("outside-plugin-root");
+    let plugin_candidate = installed_plugin.safe_worktree("plugin-candidate");
+    let configured = Fixture::new("outside-configured");
+    let safe = configured.safe_worktree("safe");
+    server.select_plugin(
+        &installed_plugin.repo,
+        &serde_json::json!({
+            "workspace_id": "w-context",
+            "workspace_cwd": outside,
+            "focused_pane_id": "p-context",
+            "focused_pane_cwd": outside
+        }),
+    );
+
+    let inventory = pipeline::scan(&Config {
+        extra_repos: vec![configured.repo.clone()],
+        integration_ref: Some("main".into()),
+        ..Config::default()
+    })
+    .expect("scan with unusable context");
+    let row = inventory.find(&safe).expect("configured safe-shaped row");
+
+    assert_eq!(row.verdict, Verdict::Review);
+    assert!(!shear::tui::preselectable(row));
+    assert_eq!(inventory.safe().count(), 0);
+    assert!(inventory.find(&plugin_candidate).is_none());
+    assert!(
+        inventory.notes.iter().any(|note| {
+            note.contains("not inside a readable git checkout")
+                && note.contains("cannot be classified safe")
+        }),
+        "{:?}",
+        inventory.notes
+    );
+}
+#[test]
+fn context_cannot_select_the_installed_plugin_repository() {
+    let _guard = env_lock();
+    let server = FakeHerdr::with_snapshot(InjectedFailure::None, snapshot_without_worktree());
+    let installed_plugin = Fixture::new("self-context-plugin-root");
+    let plugin_candidate = installed_plugin.safe_worktree("plugin-candidate");
+    let configured = Fixture::new("self-context-configured");
+    let safe = configured.safe_worktree("safe");
+    server.select_plugin(
+        &installed_plugin.repo,
+        &serde_json::json!({
+            "workspace_id": "w-context",
+            "workspace_cwd": installed_plugin.repo,
+            "focused_pane_id": "p-context",
+            "focused_pane_cwd": installed_plugin.repo
+        }),
+    );
+
+    let inventory = pipeline::scan(&Config {
+        extra_repos: vec![configured.repo.clone()],
+        integration_ref: Some("main".into()),
+        ..Config::default()
+    })
+    .expect("scan with plugin root context");
+    let row = inventory.find(&safe).expect("configured safe-shaped row");
+
+    assert_eq!(row.verdict, Verdict::Review);
+    assert!(!shear::tui::preselectable(row));
+    assert_eq!(inventory.safe().count(), 0);
+    assert!(inventory.find(&plugin_candidate).is_none());
+    assert!(
+        inventory
+            .notes
+            .iter()
+            .any(|note| note.contains("installed plugin root")
+                && note.contains("cannot be classified safe")),
+        "{:?}",
+        inventory.notes
+    );
 }
 
 #[test]
