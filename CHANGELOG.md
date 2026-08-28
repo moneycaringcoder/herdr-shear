@@ -6,6 +6,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-28
+
+### Added
+
+- Mouse support in the review pane: a left click moves the cursor to the row
+  under it and the scroll wheel moves it up and down. A click deliberately
+  never toggles a selection — pointing at a row and consenting to remove it
+  stay separate acts.
+- An `open-review` action, so the pane has a front door herdr can bind: a
+  `[[keys.command]]` entry with `type = "plugin_action"` and
+  `command = "moneycaringcoder.shear.open-review"` opens the review overlay
+  from anywhere. Until now the only route was the `herdr plugin pane open`
+  incantation, which nobody should have to remember.
+
+### Changed
+
+- The review pane is drawn by ratatui instead of the plain-text frame writer.
+  The change is visibility: the cursor row is a whole-row reverse highlight,
+  selection is a filled checkbox column, verdict tags are bold and colored —
+  green `safe`, yellow `review`, cyan `keep`, red `blocked` — and both
+  confirmations render as bordered modals over the list, with the typed
+  dirty-file count echoed as it is entered. Everything else inherits the
+  terminal's own theme: default foregrounds, no dimming, and no background
+  fills off the cursor row, because a pane that paints its own palette is
+  unreadable on exactly half of the terminals it runs in.
+- What was one file is now three edges: the pure state machine
+  (`src/tui/state.rs`) is unchanged in semantics and still runs every
+  selection, preflight and confirmation rule without a terminal; the ratatui
+  view (`src/tui/view.rs`) renders it; and the crossterm runtime
+  (`src/tui/run.rs`) owns raw mode, the alternate screen, input decoding and
+  the sizing thread. Raw mode is still restored from `Drop`, from the panic
+  hook, and from SIGINT/SIGTERM, and exit messages still print only after the
+  terminal is back to normal. Rendering tests now drive ratatui's
+  `TestBackend` and read its buffer, so what is asserted is what is drawn.
+
 ### Fixed
 
 - Undo-log write failures no longer disappear when the review pane redraws or

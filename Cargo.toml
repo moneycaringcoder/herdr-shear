@@ -1,6 +1,6 @@
 [package]
 name = "shear"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 description = "Finds git worktrees that are safe to delete, and removes the ones you pick."
 license = "MIT"
@@ -12,9 +12,11 @@ repository = "https://github.com/moneycaringcoder/herdr-shear"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+crossterm = "0.28"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 
-# Unix-only: raw terminal mode for the review pane, and SIGINT/SIGTERM handling
-# so a killed pane never leaves the terminal in raw mode.
+# Unix-only: signal handling and the low-level terminal checks that support the
+# review pane's crossterm lifecycle.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 signal-hook = "0.4"

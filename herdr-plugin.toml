@@ -11,7 +11,7 @@
 
 id = "moneycaringcoder.shear"
 name = "Shear"
-version = "0.1.2"
+version = "0.2.0"
 # Oldest herdr carrying every API this plugin calls: `worktree.list` with its
 # `open_workspace_id` field, `worktree.remove`, and `workspace.close`.
 # Developed and verified against 0.8.0 / protocol 19.
@@ -34,6 +34,17 @@ id = "review"
 title = "Shear: review worktrees"
 placement = "overlay"
 command = ["./target/release/shear", "--review"]
+
+# Opening the review pane is the plugin's front door, and herdr keybindings can
+# only target actions — so the front door is an action. It calls back into herdr
+# through HERDR_BIN_PATH to open the pane entrypoint above, which lets a user
+# bind it: type = "plugin_action", command = "moneycaringcoder.shear.open-review".
+[[actions]]
+id = "open-review"
+title = "Shear: open review pane"
+description = "Open the interactive review pane for the current session."
+contexts = ["global", "workspace"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin moneycaringcoder.shear --entrypoint review"]
 
 [[actions]]
 id = "list"

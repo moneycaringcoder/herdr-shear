@@ -10,6 +10,12 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::style::Modifier;
+use ratatui::Terminal;
+
 use shear::model::{
     Candidate, Class, Dirt, Head, Inventory, LockInfo, Merged, OpenWorkspace, PrunableInfo, Repo,
     RepoKey, Size, Upstream, Verdict, Worktree,
@@ -18,6 +24,8 @@ use shear::render::{
     self, display_width, human_age, size_cell, summary, table, truncate_left, truncate_right,
     widths_for, MIN_COLUMNS,
 };
+use shear::tui::view::{self, MouseMap};
+use shear::tui::{apply, map_key_event, Key, Mode, Review};
 
 // ---------------------------------------------------------------------------
 // Hand-built inventories
@@ -1040,4 +1048,216 @@ fn scan_notes_are_never_swallowed() {
     assert!(rendered.contains("herdr is not reachable"));
     // A per-worktree note travels with its row.
     assert!(rendered.contains("gitdir file points to non-existent location"));
+}
+
+// ---------------------------------------------------------------------------
+// Interactive review view
+// ---------------------------------------------------------------------------
+
+struct DrawnReview {
+    text: String,
+    buffer: Buffer,
+    mouse: MouseMap,
+}
+
+fn draw_review(review: &Review, width: u16, height: u16) -> DrawnReview {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    let mut mouse = MouseMap::default();
+    terminal
+        .draw(|frame| mouse = view::render(frame, review))
+        .expect("review frame");
+    let buffer = terminal.backend().buffer().clone();
+    let mut text = String::new();
+    for row in 0..buffer.area.height {
+        for column in 0..buffer.area.width {
+            let cell = buffer.cell((column, row)).expect("cell inside buffer");
+            text.push_str(cell.symbol());
+        }
+        text.push('\n');
+    }
+    DrawnReview {
+        text,
+        buffer,
+        mouse,
+    }
+}
+
+fn cell_position(buffer: &Buffer, symbol: &str) -> (u16, u16) {
+    for row in 0..buffer.area.height {
+        for column in 0..buffer.area.width {
+            if buffer
+                .cell((column, row))
+                .is_some_and(|cell| cell.symbol() == symbol)
+            {
+                return (column, row);
+            }
+        }
+    }
+    panic!("symbol {symbol:?} was not rendered");
+}
+
+#[test]
+fn review_view_makes_cursor_selection_and_verdicts_visible() {
+    let mut review = Review::new(full_inventory());
+    review.selected.insert(review.cursor);
+    review.selected.insert(2);
+
+    let drawn = draw_review(&review, 120, 24);
+
+    assert!(
+        drawn.text.contains(">[x]"),
+        "cursor checkbox:\n{}",
+        drawn.text
+    );
+    assert!(
+        drawn.text.matches("[x]").count() >= 2,
+        "both selected rows have filled checkboxes:\n{}",
+        drawn.text
+    );
+    for verdict in ["safe", "review", "keep", "blocked"] {
+        assert!(
+            drawn.text.contains(verdict),
+            "{verdict} verdict is visible:\n{}",
+            drawn.text
+        );
+    }
+    let cursor = cell_position(&drawn.buffer, ">");
+    assert!(
+        drawn
+            .buffer
+            .cell(cursor)
+            .expect("cursor cell")
+            .modifier
+            .contains(Modifier::REVERSED),
+        "the whole cursor row uses terminal-theme reversal"
+    );
+}
+
+#[test]
+fn dirty_confirmation_modal_echoes_the_required_and_typed_counts() {
+    let mut review = Review::new(full_inventory());
+    review.selected = BTreeSet::from([1, 2]);
+    review.mode = Mode::ConfirmDirty {
+        files: 7,
+        typed: "7".into(),
+        worktrees: 1,
+    };
+
+    let rendered = draw_review(&review, 100, 28).text;
+    assert!(rendered.contains("Uncommitted work"), "{rendered}");
+    assert!(rendered.contains("files at risk: 7"), "{rendered}");
+    assert!(rendered.contains("typed: 7_"), "{rendered}");
+    assert!(
+        rendered.contains("Removing a worktree leaves its branch"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn persistent_warning_survives_redraws_and_later_modes() {
+    let warning = "WARNING: keep this restore command: git worktree add /tmp/recovery";
+    let mut review = Review::new(full_inventory());
+    review.undo_warnings.push(warning.into());
+
+    for state in [
+        review.clone(),
+        apply(review.clone(), Key::SelectNone),
+        apply(review, Key::Quit),
+    ] {
+        let rendered = draw_review(&state, 120, 24).text;
+        assert!(rendered.contains(warning), "{rendered}");
+        assert_eq!(state.undo_warnings, [warning]);
+    }
+}
+
+#[test]
+fn blocked_row_refusal_names_the_unblocking_action() {
+    let mut review = Review::new(full_inventory());
+    review.cursor = review
+        .inventory
+        .candidates
+        .iter()
+        .position(|candidate| candidate.reason.contains("unlock"))
+        .expect("locked candidate");
+    let review = apply(review, Key::Toggle);
+
+    let rendered = draw_review(&review, 160, 24).text;
+    assert!(review.selected.is_empty());
+    assert!(rendered.contains("cannot be selected"), "{rendered}");
+    assert!(rendered.contains("unlock"), "{rendered}");
+}
+
+#[test]
+fn narrow_review_drops_columns_in_decision_order() {
+    let review = Review::new(full_inventory());
+    let labels = ["branch", "classes", "age", "disk"];
+    let mut dropped_at = [None; 4];
+
+    for width in (20u16..=120).rev() {
+        let rendered = draw_review(&review, width, 24).text;
+        let header = rendered
+            .lines()
+            .find(|line| line.contains("verdict"))
+            .expect("table header");
+        let tokens = header.split_whitespace().collect::<Vec<_>>();
+        for (index, label) in labels.iter().enumerate() {
+            if !tokens.contains(label) && dropped_at[index].is_none() {
+                dropped_at[index] = Some(width);
+            }
+        }
+    }
+
+    let [branch, classes, age, disk] = dropped_at.map(Option::unwrap);
+    assert!(
+        branch > classes && classes > age && age > disk,
+        "drop widths were branch={branch}, classes={classes}, age={age}, disk={disk}"
+    );
+}
+
+#[test]
+fn crossterm_keys_map_onto_the_existing_state_machine_keys() {
+    let cases = [
+        (KeyCode::Up, Key::Up),
+        (KeyCode::Down, Key::Down),
+        (KeyCode::Char('k'), Key::Up),
+        (KeyCode::Char('j'), Key::Down),
+        (KeyCode::Char(' '), Key::Toggle),
+        (KeyCode::Char('a'), Key::SelectSafe),
+        (KeyCode::Char('n'), Key::SelectNone),
+        (KeyCode::Char('r'), Key::Remove),
+        (KeyCode::Char('R'), Key::Rescan),
+        (KeyCode::Char('q'), Key::Quit),
+        (KeyCode::Esc, Key::Quit),
+        (KeyCode::Char('5'), Key::Digit(5)),
+        (KeyCode::Backspace, Key::Backspace),
+    ];
+    for (code, expected) in cases {
+        assert_eq!(
+            map_key_event(KeyEvent::new(code, KeyModifiers::NONE)),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn mouse_hit_map_identifies_rows_without_turning_clicks_into_toggles() {
+    let review = Review::new(full_inventory());
+    let drawn = draw_review(&review, 120, 24);
+    let (column, row) = cell_position(&drawn.buffer, ">");
+
+    assert_eq!(
+        drawn.mouse.candidate_at(column, row),
+        Some(review.cursor),
+        "the cursor's visible row is clickable"
+    );
+    assert_eq!(
+        drawn.mouse.candidate_at(0, 0),
+        None,
+        "header and border cells are not worktree hits"
+    );
+    assert!(
+        review.selected.is_empty(),
+        "hit testing exposes a row index but never toggles selection"
+    );
 }
