@@ -100,6 +100,12 @@ impl Server {
                     .push(line.trim_end().to_string());
 
                 if let Some(Some(reply)) = queue.pop_front() {
+                    let request: Value =
+                        serde_json::from_str(line.trim_end()).expect("fake request is JSON");
+                    let mut response: Value =
+                        serde_json::from_str(&reply).expect("captured reply is JSON");
+                    response["id"] = request["id"].clone();
+                    let reply = response.to_string();
                     let _ = (&stream).write_all(reply.as_bytes());
                     let _ = (&stream).write_all(b"\n");
                     let _ = (&stream).flush();
@@ -681,10 +687,9 @@ fn a_locked_refusal_arrives_as_worktree_remove_failed_and_is_never_retried() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_transport_failure_is_retried_once_with_the_same_id() {
-    // The server answers one request per connection and then closes, so the
-    // connection a client would reuse is already gone. The same retry is what
-    // carries the client across a `herdr update --handoff`.
+fn an_ambiguous_destructive_failure_is_not_retried() {
+    // The server may have completed the removal before the response was lost.
+    // Retrying a destructive call would make an unknown outcome worse.
     let reply = line(&json!({
         "id": "shear:1",
         "result": {
@@ -694,24 +699,25 @@ fn a_transport_failure_is_retried_once_with_the_same_id() {
             "workspace_id": "w18",
         },
     }));
-    let server = Server::new("retry", vec![None, Some(reply)]);
+    let server = Server::new("no-destructive-retry", vec![None, Some(reply)]);
     let (_guard, mut client) = server.client();
 
-    let removed = client
+    client
         .remove_worktree("w18", true)
-        .expect("the retry carries the call");
-    assert!(removed.forced);
+        .expect_err("an ambiguous removal outcome must be reported");
 
     let requests = server.requests();
-    assert_eq!(requests.len(), 2, "one attempt, then one retry");
-    assert_eq!(server.connections(), 2, "each on its own connection");
-    let first = assert_wire(&requests[0], "worktree.remove");
-    let second = assert_wire(&requests[1], "worktree.remove");
+    assert_eq!(requests.len(), 1, "the destructive call is attempted once");
     assert_eq!(
-        first["id"], second["id"],
-        "a retry is the same request, not a new one"
+        server.connections(),
+        1,
+        "the destructive call is not redialed"
     );
-    assert_eq!(first["params"], second["params"]);
+    let request = assert_wire(&requests[0], "worktree.remove");
+    assert_eq!(
+        request["params"],
+        json!({"workspace_id": "w18", "force": true})
+    );
 }
 
 #[test]

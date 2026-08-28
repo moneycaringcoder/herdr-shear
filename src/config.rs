@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crook::env::PluginEnv;
+
 use crate::model::{Merged, Upstream};
 use crate::Result;
 
@@ -337,7 +339,7 @@ fn values_arg(args: &[String], name: &str) -> Result<Vec<String>> {
 }
 
 pub fn plugin_id() -> String {
-    non_empty_env("HERDR_PLUGIN_ID").unwrap_or_else(|| PLUGIN_ID.to_string())
+    PluginEnv::resolve(PLUGIN_ID).plugin_id().to_owned()
 }
 
 /// Where the undo log lives: `~/.local/state/herdr/plugins/<id>/`.
@@ -347,27 +349,12 @@ pub fn plugin_id() -> String {
 /// directory, or a removal made from a plugin action would not appear in the
 /// undo log a hand-run `--undo-log` reads.
 pub fn state_dir() -> PathBuf {
-    non_empty_env("HERDR_PLUGIN_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            xdg_dir("XDG_STATE_HOME", ".local/state")
-                .join("herdr")
-                .join("plugins")
-                .join(plugin_id())
-        })
+    PluginEnv::resolve(PLUGIN_ID).state_dir().to_owned()
 }
 
 /// Where the config file lives: `~/.config/herdr/plugins/config/<id>/`.
 pub fn config_dir() -> PathBuf {
-    non_empty_env("HERDR_PLUGIN_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            xdg_dir("XDG_CONFIG_HOME", ".config")
-                .join("herdr")
-                .join("plugins")
-                .join("config")
-                .join(plugin_id())
-        })
+    PluginEnv::resolve(PLUGIN_ID).config_dir().to_owned()
 }
 
 /// Append-only record of every removal shear successfully records.
@@ -384,24 +371,6 @@ pub fn undo_log_in(state_dir: &Path) -> PathBuf {
 /// frame. One JSON object per line; rewritten whole, never appended forever.
 pub fn size_cache() -> PathBuf {
     state_dir().join("sizes.jsonl")
-}
-
-/// An XDG base directory. The variable wins when it is set to an absolute path
-/// — the spec says a relative one must be ignored — otherwise `$HOME/<relative>`.
-fn xdg_dir(variable: &str, relative: &str) -> PathBuf {
-    if let Some(base) = non_empty_env(variable)
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-    {
-        return base;
-    }
-    match non_empty_env("HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-    {
-        Some(home) => home.join(relative),
-        None => std::env::temp_dir().join("herdr-no-home"),
-    }
 }
 
 /// herdr injects empty strings for absent context, so empty means unset.
