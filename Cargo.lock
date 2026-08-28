@@ -50,6 +50,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "crook"
+version = "0.1.0"
+source = "git+https://github.com/moneycaringcoder/herdr-crook?rev=ed0df17e2c515d94516f8ad088283896484fd71d#ed0df17e2c515d94516f8ad088283896484fd71d"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "crossterm"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -405,6 +413,7 @@ dependencies = [
 name = "shear"
 version = "0.2.0"
 dependencies = [
+ "crook",
  "crossterm",
  "libc",
  "ratatui",

@@ -1,27 +1,15 @@
-//! herdr socket client.
-//!
-//! Newline-delimited JSON over the socket at `HERDR_SOCKET_PATH`. The server
-//! answers exactly one request per connection and then closes, so every call
-//! must be able to reconnect and retry once — see `docs/herdr-protocol.md`.
-//!
-//! Adapted from the verified client in herdr-collide. The transport half is
-//! unchanged; the methods are shear's.
+//! Thin shear-specific wrapper around Crook's herdr socket client.
 
 use std::fmt;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use serde_json::{json, Map, Value};
+use crook::client::{Client, Error as CrookError, RetrySafety};
+use crook::env::PluginEnv;
+use serde_json::{json, Value};
 
 use crate::config;
 use crate::model::{OpenWorkspace, RepoKey};
 use crate::Result;
-
-/// Long enough that a busy server is not mistaken for a dead one, short enough
-/// that a scan can never wedge behind one call.
-const IO_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A herdr error envelope, carried as a real error type so callers can tell
 /// `dirty_worktree_requires_force` (a guard doing its job) from a transport
@@ -58,18 +46,9 @@ pub const ERR_REMOVE_FAILED: &str = "worktree_remove_failed";
 pub const ERR_NOT_GIT: &str = "not_git_worktree";
 pub const ERR_WORKSPACE_NOT_FOUND: &str = "workspace_not_found";
 
-/// Split so that only transport failures are retried. Retrying a rejected
-/// request would just be rejected again, and would double-count against herdr's
-/// own error accounting.
-enum Failure {
-    Transport(String),
-    Protocol(HerdrError),
-}
-
 #[derive(Debug)]
 pub struct Herdr {
-    socket_path: PathBuf,
-    next_id: u64,
+    client: Client,
 }
 
 /// One repository the session has a workspace in.
@@ -135,14 +114,10 @@ pub struct Removed {
 
 impl Herdr {
     pub fn connect() -> Result<Self> {
-        let socket_path = socket_path()?;
-        // Dial once so a missing server is reported here, with the path, rather
-        // than as a confusing failure inside the first call.
-        dial(&socket_path)?;
-        Ok(Self {
-            socket_path,
-            next_id: 0,
-        })
+        let environment = PluginEnv::resolve(config::PLUGIN_ID);
+        let client =
+            Client::connect(environment.socket_path(), "shear").map_err(into_local_error)?;
+        Ok(Self { client })
     }
 
     /// The repositories the session knows about, every pane's working
@@ -157,7 +132,7 @@ impl Herdr {
     /// so a brand-new repo is invisible in `repos` and has to be reached with
     /// `--repo`.
     pub fn session_view(&mut self) -> Result<SessionView> {
-        let result = self.call("session.snapshot", json!({}))?;
+        let result = self.call("session.snapshot", json!({}), RetrySafety::Idempotent)?;
         // The payload is `{"type":"session_snapshot","snapshot":{...}}`; the
         // arrays live one level down, under `snapshot`. Reading them off the
         // result object silently yields no repos at all, which looks exactly
@@ -193,6 +168,7 @@ impl Herdr {
         let result = self.call(
             "worktree.list",
             json!({ "cwd": repo_root.to_string_lossy() }),
+            RetrySafety::Idempotent,
         )?;
         let worktrees = result
             .get("worktrees")
@@ -227,6 +203,7 @@ impl Herdr {
         let result = self.call(
             "worktree.remove",
             json!({ "workspace_id": workspace_id, "force": force }),
+            RetrySafety::Never,
         )?;
         Ok(Removed {
             path: PathBuf::from(text(&result, "path").ok_or_else(|| {
@@ -249,111 +226,35 @@ impl Herdr {
     /// the user selected is held open by a workspace and they have agreed to
     /// close it.
     pub fn close_workspace(&mut self, workspace_id: &str) -> Result<()> {
-        self.call("workspace.close", json!({ "workspace_id": workspace_id }))?;
+        self.call(
+            "workspace.close",
+            json!({ "workspace_id": workspace_id }),
+            RetrySafety::Never,
+        )?;
         Ok(())
     }
 
     pub fn notify(&mut self, title: &str, body: &str) -> Result<()> {
-        self.call("notification.show", json!({ "title": title, "body": body }))?;
+        self.call(
+            "notification.show",
+            json!({ "title": title, "body": body }),
+            RetrySafety::Never,
+        )?;
         Ok(())
     }
 
-    fn call(&mut self, method: &str, params: Value) -> Result<Value> {
-        self.next_id += 1;
-        let id = format!("shear:{}", self.next_id);
-        match self.call_once(&id, method, &params) {
-            Ok(result) => Ok(result),
-            Err(Failure::Protocol(err)) => Err(Box::new(err)),
-            // One request per connection is the normal path, not an error path:
-            // the server EOFs after answering, so the connection we would reuse
-            // is already gone. The same retry carries the client across a
-            // `herdr update --handoff`.
-            Err(Failure::Transport(first)) => match self.call_once(&id, method, &params) {
-                Ok(result) => Ok(result),
-                Err(Failure::Protocol(err)) => Err(Box::new(err)),
-                Err(Failure::Transport(second)) => {
-                    Err(format!("{method} failed twice: {first}; on retry: {second}").into())
-                }
-            },
-        }
-    }
-
-    fn call_once(
-        &self,
-        id: &str,
-        method: &str,
-        params: &Value,
-    ) -> std::result::Result<Value, Failure> {
-        let stream = dial(&self.socket_path).map_err(|e| Failure::Transport(e.to_string()))?;
-
-        // `params` is mandatory and must be an object — never null, `{}` when
-        // empty.
-        let params = if params.is_object() {
-            params.clone()
-        } else {
-            Value::Object(Map::new())
-        };
-        let mut line = serde_json::to_string(&json!({
-            "id": id,
-            "method": method,
-            "params": params,
-        }))
-        .map_err(|e| Failure::Transport(format!("could not encode request: {e}")))?;
-        line.push('\n');
-
-        (&stream)
-            .write_all(line.as_bytes())
-            .and_then(|()| (&stream).flush())
-            .map_err(|e| Failure::Transport(format!("write to {method} failed: {e}")))?;
-
-        let mut response = String::new();
-        BufReader::new(&stream)
-            .read_line(&mut response)
-            .map_err(|e| Failure::Transport(format!("read of {method} response failed: {e}")))?;
-        if response.trim().is_empty() {
-            return Err(Failure::Transport(
-                "server closed the connection without answering".into(),
-            ));
-        }
-
-        let value: Value = serde_json::from_str(response.trim_end())
-            .map_err(|e| Failure::Transport(format!("malformed response to {method}: {e}")))?;
-
-        if let Some(err) = value.get("error") {
-            return Err(Failure::Protocol(HerdrError {
-                code: text(err, "code").unwrap_or("unknown_error").to_string(),
-                message: text(err, "message").unwrap_or("no message").to_string(),
-            }));
-        }
-        match value.get("result") {
-            Some(result) => Ok(result.clone()),
-            None => Err(Failure::Transport(format!(
-                "response to {method} carried neither result nor error"
-            ))),
-        }
+    fn call(&self, method: &str, params: Value, retry_safety: RetrySafety) -> Result<Value> {
+        self.client
+            .request(method, params, retry_safety)
+            .map_err(into_local_error)
     }
 }
 
-fn dial(socket_path: &Path) -> Result<UnixStream> {
-    let stream = UnixStream::connect(socket_path)
-        .map_err(|e| format!("cannot reach herdr at {}: {e}", socket_path.display()))?;
-    // Without these a half-open socket parks the caller forever.
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    Ok(stream)
-}
-
-fn socket_path() -> Result<PathBuf> {
-    // herdr injects this into everything it spawns; the fallback exists only for
-    // hand invocation from a shell.
-    if let Some(path) = config::non_empty_env("HERDR_SOCKET_PATH") {
-        return Ok(PathBuf::from(path));
+fn into_local_error(error: CrookError) -> Box<dyn std::error::Error> {
+    match error {
+        CrookError::Protocol { code, message } => Box::new(HerdrError { code, message }),
+        error => Box::new(error),
     }
-    let config_home = config::non_empty_env("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| config::non_empty_env("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .ok_or("HERDR_SOCKET_PATH is unset and neither XDG_CONFIG_HOME nor HOME is set")?;
-    Ok(config_home.join("herdr").join("herdr.sock"))
 }
 
 /// Non-empty string field, since herdr reports absent context as an empty string
