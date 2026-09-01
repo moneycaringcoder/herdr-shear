@@ -75,9 +75,10 @@ dependencies = [
 
 [[package]]
 name = "crook"
-version = "0.2.0"
-source = "git+https://github.com/moneycaringcoder/herdr-crook?tag=v0.2.0#b13b54a1207a2d288888abf8a097cdcb2ad13ade"
+version = "0.2.1"
+source = "git+https://github.com/moneycaringcoder/herdr-crook?tag=v0.2.1#26eb930be2f51e456645ff37006b6e34102ec979"
 dependencies = [
+ "libc",
  "serde_json",
 ]
 
